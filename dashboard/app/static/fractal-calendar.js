@@ -16,6 +16,8 @@
   const MORPH_MS = 460;                       // expand/contract duration
   const TICK_K = 0.42;                        // each wheel tick covers this fraction of what REMAINS to the locked framing
   const HANDOFF_RATIO = 1.22;                 // remaining zoom ≤ this → swap in the real container (negligible travel)
+  const EXP_M = 16;                           // the expanded bucket sits with EQUAL margins to every window edge
+  const expRect = () => ({ x: EXP_M, y: EXP_M, w: window.innerWidth - 2 * EXP_M, h: window.innerHeight - 2 * EXP_M });
   const RADIUS_F = 16 / 245;                  // the ticketing zone's corner PROPORTION (16px on its ~245px side):
                                               // perceived roundness is relative to size, so the radius scales
                                               // with each bucket — same shape at every level, no capsule minis
@@ -62,16 +64,28 @@
          trim is calc(base × --kx/--ky) and every band/gap/inset is an axis-safe fraction, so a
          mini scaled UP and the expanded view scaled DOWN have their interiors in IDENTICAL
          relative positions — the day grids line up mechanically at the handoff. ── */
+      /* Rings replace borders (inset shadows paint WITHOUT touching the content box), so their
+         width can lerp per lockstep with zero effect on the geometry parity. Every stage property
+         — ring width, label sizes, detail opacity — interpolates via --lp (0 at rest → 1 at the
+         boundary) toward the transition state, so each lock stop is that increment closer. */
       .fc-bucket { position: relative; box-sizing: border-box; display: flex; flex-direction: column; min-height: 0;
-        overflow: hidden; color: #fff;
+        overflow: hidden; color: #fff; border: 0;
         border-radius: calc(var(--mon-r, 16px) * var(--kx, 1)) / calc(var(--mon-r, 16px) * var(--ky, 1));
         padding: calc(12px * var(--ky, 1)) calc(14px * var(--kx, 1)) calc(14px * var(--ky, 1));
         background: linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
-        border: solid rgba(255,255,255,0.14);
-        border-width: calc(1px * var(--ky, 1)) calc(1px * var(--kx, 1));
-        box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.18),
-          0 calc(18px * var(--ky, 1)) calc(42px * var(--ky, 1)) rgba(0,0,0,0.28);
-        transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+        box-shadow: inset 0 0 0 var(--ring, 1px) rgba(255,255,255,0.14),
+          inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 42px rgba(0,0,0,0.28);
+        transition: box-shadow .18s ease, background .18s ease; }
+      /* Lockstep lerps: the year layer's months (and a month's days) step toward the boundary. */
+      .fc-level .fc-month { --ring: calc(1px + (var(--ring-t, 1px) - 1px) * var(--lp, 0)); }
+      .fc-level .fc-day, .fc-expander[data-kind="month"] .fc-day {
+        --ringd: calc(1px + (var(--ring-t, 1px) - 1px) * var(--lp, 0)); }
+      .fc-level .fc-hd { font-size: calc(0.98rem + (var(--hd-t, 0.98rem) - 0.98rem) * var(--lp, 0)); }
+      .fc-level .fc-pill { opacity: var(--lp, 0); }
+      .fc-level .fc-day-num { font-size: var(--num-t, 0.85rem); opacity: var(--lp, 0); }
+      .fc-level .fc-dowrow span { font-size: var(--dow-t, 0.72rem); opacity: var(--lp, 0); }
+      .fc-expander[data-kind="month"] .fc-day-num {
+        font-size: calc(0.85rem + (var(--num-t, 0.85rem) - 0.85rem) * var(--lp, 0)); }
       /* The zone header: a fixed FRACTION band (text floats inside it — text is per-level LOD). */
       .fc-hd { flex: 0 0 10%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
         padding: 0 1%; font-size: 0.98rem; font-weight: 700; line-height: 1.25; letter-spacing: .01em;
@@ -87,38 +101,32 @@
       .fc-days { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr);
         grid-template-rows: repeat(6, 1fr); column-gap: 2%; row-gap: 2.6%; }
       /* A day bucket: the same family — its trim scales by the SAME k, so cells coincide too. */
-      .fc-day { position: relative; min-height: 0; overflow: hidden;
+      .fc-day { position: relative; min-height: 0; overflow: hidden; border: 0;
         border-radius: calc(var(--day-r, 3px) * var(--kx, 1)) / calc(var(--day-r, 3px) * var(--ky, 1));
         background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035));
-        border: solid rgba(255,255,255,0.10);
-        border-width: calc(1px * var(--ky, 1)) calc(1px * var(--kx, 1));
-        box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.08);
-        transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+        box-shadow: inset 0 0 0 var(--ringd, 1px) rgba(255,255,255,0.10),
+          inset 0 1px 0 rgba(255,255,255,0.08);
+        transition: box-shadow .18s ease, background .18s ease; }
       .fc-day-num { position: absolute; top: 6%; left: 7%; font-size: 0.85rem; font-weight: 700;
         color: rgba(255,255,255,0.78); line-height: 1; }
       .fc-day-body { position: absolute; inset: 24% 5% 5%; }
-      .fc-today { border-color: rgba(125,180,255,0.85);
-        box-shadow: inset 0 0 0 calc(1px * var(--ky, 1)) rgba(125,180,255,0.45),
-          0 0 calc(14px * var(--ky, 1)) rgba(90,150,255,0.3); }
+      .fc-today { box-shadow: inset 0 0 0 var(--ringd, 1px) rgba(255,255,255,0.10),
+        inset 0 0 0 calc(var(--ringd, 1px) + 1px) rgba(125,180,255,0.45),
+        0 0 14px rgba(90,150,255,0.3); }
       /* The zone empty-state, verbatim ("Drag tickets here" → cards). */
       .fc-empty { width: 100%; margin: auto 0; padding: 14px 8px; text-align: center;
         color: rgba(255,255,255,0.38); font-size: 0.8rem; line-height: 1.4; }
 
-      /* LOD is per LEVEL: the year grid renders its months as QUIET structural buckets — the day
-         grid is texture, so its numbers and weekday labels (unreadable at this size = pure noise)
-         belong to the month level, where they're legible. Bands keep their space: the expander is
-         still the mini's geometric twin. */
-      .fc-level .fc-day-num { display: none; }
-      .fc-level .fc-dowrow span { visibility: hidden; }
-      /* Level semantics: at the YEAR the month is the object (days are texture); inside a month
-         the day buckets are the objects — wearing the pipeline's is-target glow on hover. */
+      /* Level semantics: at the YEAR the month is the object (days are texture whose detail fades
+         in per lockstep via --lp); inside a month the day buckets are the objects — wearing the
+         pipeline's is-target glow on hover. */
       .fc-surface[data-level="0"] .fc-day { pointer-events: none; }
       .fc-surface[data-level="0"] .fc-month { cursor: pointer; }
-      .fc-surface[data-level="0"] .fc-month:hover { border-color: rgba(125,180,255,0.92);
+      .fc-surface[data-level="0"] .fc-month:hover {
         background: linear-gradient(180deg, rgba(70,110,190,0.34), rgba(40,70,130,0.26));
         box-shadow: inset 0 0 0 1px rgba(125,180,255,0.5), 0 0 30px rgba(90,150,255,0.42); }
       .fc-expander[data-kind="month"] .fc-day { cursor: pointer; pointer-events: auto; }
-      .fc-expander[data-kind="month"] .fc-day:hover { border-color: rgba(125,180,255,0.92);
+      .fc-expander[data-kind="month"] .fc-day:hover {
         background: linear-gradient(180deg, rgba(70,110,190,0.34), rgba(40,70,130,0.26));
         box-shadow: inset 0 0 0 1px rgba(125,180,255,0.5), 0 0 18px rgba(90,150,255,0.35); }
 
@@ -126,7 +134,7 @@
          one layout, one backdrop pass), travelling between its slot and the window on a composited
          transform — so the motion runs on the GPU and it lands at scale 1 as a byte-standard
          bucket, pixel-identical to its twin in the grid. */
-      .fc-expander { position: absolute; z-index: 5; left: 0; pointer-events: auto;
+      .fc-expander { position: absolute; z-index: 5; pointer-events: auto;
         transform-origin: 0 0; will-change: transform;
         -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); }
     `;
@@ -141,7 +149,7 @@
       `><span class="fc-day-num">${d}</span><div class="fc-day-body"></div></div>`;
   };
   const monthInnerHTML = (m, expanded) =>
-    `<div class="fc-hd"><span>${MONTHS[m]}</span>${expanded ? `<span class="fc-pill">${YEAR}</span>` : ""}</div>` +
+    `<div class="fc-hd"><span>${MONTHS[m]}</span><span class="fc-pill">${YEAR}</span></div>` +
     `<div class="fc-dowrow">${DOW.map((d) => `<span>${d}</span>`).join("")}</div>` +
     `<div class="fc-days">${Array.from({ length: daysIn(m) }, (_, i) => dayCellHTML(m, i + 1)).join("")}</div>`;
   const dayInnerHTML = (date) => {
@@ -180,7 +188,8 @@
   // The grid contain-fits at that aspect and centres in the region below the control strip.
   const layoutGrid = (grid) => {
     const W = window.innerWidth, TOP = 48, M = 14, GAP = 14;
-    const A = W / (window.innerHeight - TOP);                  // the expanded bucket's aspect
+    const E = expRect();
+    const A = E.w / E.h;                                       // the expanded bucket's aspect (equal margins)
     const rw = W - M * 2, rh = window.innerHeight - TOP - M * 2;
     let cw = (rw - 3 * GAP) / 4, ch = cw / A;                  // width-limited fit…
     if (3 * ch + 2 * GAP > rh) { ch = (rh - 2 * GAP) / 3; cw = ch * A; }   // …else height-limited
@@ -212,6 +221,7 @@
         `A ${r} ${r} 0 0 1 ${x} ${y + h - r} L ${x} ${y + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`;
     });
     frost.style.clipPath = `path('${parts.join(" ")}')`;
+    setChildTargets(yearEl);
   };
 
   // ── The lean: one composited transform, cursor-anchored, gently centre-drifting ─────────
@@ -219,6 +229,10 @@
     const el = layers[level]; if (!el) return;
     el.style.transition = animate ? `transform 300ms cubic-bezier(.25, .46, .45, .94)` : "none";
     el.style.transform = `translate(${-gsx}px, ${-gsy}px) scale(${gz})`;
+    // Lockstep progress: 0 at rest -> 1 at the boundary. Text sizes, ring weights and detail
+    // opacity all lerp on this, so every lock stop is that increment closer to the transition.
+    const S = el._childS || 0;
+    el.style.setProperty("--lp", (S > 1 ? clampN((gz - 1) / (S / HANDOFF_RATIO - 1), 0, 1) : 0).toFixed(3));
     surface.style.setProperty("--fc-blur", `${(28 / gz).toFixed(1)}px`);   // constant effective frost
   };
   // The LOCKED framing of a bucket: uniform contain-fit of its slot inside the expanded view's
@@ -226,11 +240,11 @@
   const framingFor = (targetEl) => {
     const below = layers[level];
     const b = layoutRect(targetEl, below);
-    const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;
-    const S = Math.min(W / b.w, EH / b.h);
+    const E = expRect();
+    const S = Math.min(E.w / b.w, E.h / b.h);
     return { s: S,
-      sx: below.offsetLeft + (b.x + b.w / 2) * S - W / 2,
-      sy: below.offsetTop + (b.y + b.h / 2) * S - (TOP + EH / 2) };
+      sx: below.offsetLeft + (b.x + b.w / 2) * S - (E.x + E.w / 2),
+      sy: below.offsetTop + (b.y + b.h / 2) * S - (E.y + E.h / 2) };
   };
   const scheduleSettle = () => {
     clearTimeout(settleTimer);
@@ -283,14 +297,30 @@
     exp.dataset.kind = isMonth ? "month" : "day";
     if (isMonth) { exp.dataset.month = targetEl.dataset.month; exp.innerHTML = monthInnerHTML(+targetEl.dataset.month - 1, true); }
     else { exp.dataset.date = targetEl.dataset.date; exp.innerHTML = dayInnerHTML(targetEl.dataset.date); }
-    const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;
-    Object.assign(exp.style, { top: `${TOP}px`, width: `${W}px`, height: `${EH}px` });
+    const E = expRect();
+    Object.assign(exp.style, { left: `${E.x}px`, top: `${E.y}px`, width: `${E.w}px`, height: `${E.h}px` });
     // The parity factors: the expander IS its source bucket grown by (final ÷ slot) per axis —
     // every k-scaled trim value inside then lands on the mini's pixels when mapped back onto it.
     const b = layoutRect(targetEl, layers[level]);
-    exp.style.setProperty("--kx", (W / b.w).toFixed(4));
-    exp.style.setProperty("--ky", (EH / b.h).toFixed(4));
+    exp.style.setProperty("--kx", (E.w / b.w).toFixed(4));
+    exp.style.setProperty("--ky", (E.h / b.h).toFixed(4));
     return exp;
+  };
+  // Publish the lockstep TARGETS for a host's child buckets: the local values that, carried by the
+  // camera to the handoff, land exactly on the incoming container's text sizes and ring weights.
+  const setChildTargets = (host) => {
+    const E = expRect();
+    const kind = host.classList.contains("fc-expander") ? host.dataset.kind : "year";
+    if (kind === "day") { host._childS = 0; return; }
+    const c = kind === "year" ? host.querySelector(".fc-month") : host.querySelector(".fc-day");
+    if (!c) { host._childS = 0; return; }
+    const b = layoutRect(c, host);
+    const kx = E.w / b.w;
+    host._childS = Math.min(E.w / b.w, E.h / b.h);
+    host.style.setProperty("--ring-t", `${(1 / kx).toFixed(3)}px`);
+    host.style.setProperty("--hd-t", `${(1.3 / kx).toFixed(4)}rem`);
+    host.style.setProperty("--num-t", `${((kind === "year" ? 0.85 : 1.3) / kx).toFixed(4)}rem`);
+    host.style.setProperty("--dow-t", `${(0.72 / kx).toFixed(4)}rem`);
   };
   const keyOf = (el) => (el.dataset.month ? "m" + el.dataset.month : "d" + el.dataset.date);
   // Hover = intent: pre-build (and pre-raster, at 0.001 opacity) the expander for the bucket
@@ -304,6 +334,7 @@
     const exp = buildExpander(targetEl);
     Object.assign(exp.style, { opacity: "0.001", pointerEvents: "none", zIndex: "1" });
     surface.appendChild(exp);
+    setChildTargets(exp);
     warm = { key, el: exp };
   };
   const dropWarm = () => { if (warm) { warm.el.remove(); warm = null; } };
@@ -312,21 +343,21 @@
   //    trajectory the expander rides out of it (the iOS app-open grammar). ──────────────────
   const expand = (targetEl) => {
     transitioning = true;
-    const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;
+    const E = expRect();
     const r = targetEl.getBoundingClientRect();   // live (leaned) rect — the expander's start
     const key = keyOf(targetEl);
     let exp;
     if (warm && warm.key === key) { exp = warm.el; warm = null; }
-    else { dropWarm(); exp = buildExpander(targetEl); surface.appendChild(exp); }
+    else { dropWarm(); exp = buildExpander(targetEl); surface.appendChild(exp); setChildTargets(exp); }
     srcSel[level] = level === 0 ? `.fc-month[data-month="${targetEl.dataset.month}"]` : `.fc-day[data-date="${targetEl.dataset.date}"]`;
     Object.assign(exp.style, { zIndex: "5", pointerEvents: "auto", transition: "none", opacity: "0",
-      transform: `translate(${r.left}px, ${r.top - TOP}px) scale(${r.width / W}, ${r.height / EH})` });
+      transform: `translate(${(r.left - E.x).toFixed(2)}px, ${(r.top - E.y).toFixed(2)}px) scale(${(r.width / E.w).toFixed(5)}, ${(r.height / E.h).toFixed(5)})` });
     // The dive: map the bucket's LAYOUT rect onto the expander's final rect — the outer layer
     // travels there (non-uniform, per axis) so the slot stays pinned under the expander.
     const below = layers[level];
     const b = layoutRect(targetEl, below);        // sub-pixel slot rect within the layer
-    const KX = W / b.w, KY = EH / b.h;
-    const dive = `translate(${(-b.x * KX).toFixed(2)}px, ${(TOP - below.offsetTop - b.y * KY).toFixed(2)}px) scale(${KX.toFixed(4)}, ${KY.toFixed(4)})`;
+    const KX = E.w / b.w, KY = E.h / b.h;
+    const dive = `translate(${(E.x - below.offsetLeft - b.x * KX).toFixed(2)}px, ${(E.y - below.offsetTop - b.y * KY).toFixed(2)}px) scale(${KX.toFixed(4)}, ${KY.toFixed(4)})`;
     void exp.offsetWidth;
     requestAnimationFrame(() => {                 // one frame for the (warm) raster to commit
       exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.35)}ms ease`;
@@ -358,16 +389,16 @@
     transitioning = true;
     const exp = layers[level];
     const below = layers[level - 1];
-    const W = exp.offsetWidth, EH = exp.offsetHeight, TOP = exp.offsetTop;
+    const E = expRect();
     const src = below.querySelector(srcSel[level - 1]);
     // slot geometry from LAYOUT, sub-pixel (below is parked at identity — rects are layout-true)
     const b = layoutRect(src, below);
-    const KX = W / b.w, KY = EH / b.h;
-    const dive = `translate(${(-b.x * KX).toFixed(2)}px, ${(TOP - below.offsetTop - b.y * KY).toFixed(2)}px) scale(${KX.toFixed(4)}, ${KY.toFixed(4)})`;
+    const KX = E.w / b.w, KY = E.h / b.h;
+    const dive = `translate(${(E.x - below.offsetLeft - b.x * KX).toFixed(2)}px, ${(E.y - below.offsetTop - b.y * KY).toFixed(2)}px) scale(${KX.toFixed(4)}, ${KY.toFixed(4)})`;
     // The landing framing: identity for a full ride-out (Escape), else the locked contain-fit.
-    const S = fullOut ? 1 : Math.min(W / b.w, EH / b.h);
-    const fsx = fullOut ? 0 : below.offsetLeft + (b.x + b.w / 2) * S - W / 2;
-    const fsy = fullOut ? 0 : below.offsetTop + (b.y + b.h / 2) * S - (TOP + EH / 2);
+    const S = fullOut ? 1 : Math.min(E.w / b.w, E.h / b.h);
+    const fsx = fullOut ? 0 : below.offsetLeft + (b.x + b.w / 2) * S - (E.x + E.w / 2);
+    const fsy = fullOut ? 0 : below.offsetTop + (b.y + b.h / 2) * S - (E.y + E.h / 2);
     // the slot's screen rect UNDER that framing = where the expander shrinks to
     const rx = below.offsetLeft + b.x * S - fsx, ry = below.offsetTop + b.y * S - fsy;
     below.style.transition = "none";
@@ -382,7 +413,7 @@
       below.style.transform = `translate(${(-fsx).toFixed(2)}px, ${(-fsy).toFixed(2)}px) scale(${S.toFixed(4)})`;
       below.style.opacity = "1";
       exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.45)}ms ease ${Math.round(MORPH_MS * 0.55)}ms`;
-      exp.style.transform = `translate(${rx.toFixed(2)}px, ${(ry - TOP).toFixed(2)}px) scale(${(b.w * S / W).toFixed(4)}, ${(b.h * S / EH).toFixed(4)})`;
+      exp.style.transform = `translate(${(rx - E.x).toFixed(2)}px, ${(ry - E.y).toFixed(2)}px) scale(${(b.w * S / E.w).toFixed(5)}, ${(b.h * S / E.h).toFixed(5)})`;
       exp.style.opacity = "0";
     });
     setTimeout(() => {
@@ -454,7 +485,8 @@
     window.addEventListener("resize", () => {
       gz = 1; gsx = 0; gsy = 0; apply(false);
       dropWarm();
-      for (let i = 1; i <= level; i++) if (layers[i]) Object.assign(layers[i].style, { left: "0px", top: "48px", width: `${window.innerWidth}px`, height: `${window.innerHeight - 48}px` });
+      const E = expRect();
+      for (let i = 1; i <= level; i++) if (layers[i]) Object.assign(layers[i].style, { left: `${E.x}px`, top: `${E.y}px`, width: `${E.w}px`, height: `${E.h}px` });
       layoutFrost();
     });
     apply(false);
@@ -473,17 +505,18 @@
     _parity: (mIdx, opacity = 1) => {
       const mini = layers[0].querySelector(`.fc-month[data-month="${mIdx}"]`);
       const r = mini.getBoundingClientRect();
-      const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;
+      const E = expRect();
       const exp = document.createElement("div");
       exp.className = "fc-bucket fc-expander fc-parity";
       exp.dataset.kind = "month";
       exp.innerHTML = monthInnerHTML(mIdx - 1, true);
       const b = layoutRect(mini, layers[0]);
-      exp.style.setProperty("--kx", (W / b.w).toFixed(4));
-      exp.style.setProperty("--ky", (EH / b.h).toFixed(4));
-      Object.assign(exp.style, { top: `${TOP}px`, width: `${W}px`, height: `${EH}px`, opacity: String(opacity),
+      exp.style.setProperty("--kx", (E.w / b.w).toFixed(4));
+      exp.style.setProperty("--ky", (E.h / b.h).toFixed(4));
+      setChildTargets(exp);
+      Object.assign(exp.style, { left: `${E.x}px`, top: `${E.y}px`, width: `${E.w}px`, height: `${E.h}px`, opacity: String(opacity),
         transformOrigin: "0 0",
-        transform: `translate(${r.left}px, ${r.top - TOP}px) scale(${r.width / W}, ${r.height / EH})` });
+        transform: `translate(${(r.left - E.x).toFixed(2)}px, ${(r.top - E.y).toFixed(2)}px) scale(${(r.width / E.w).toFixed(5)}, ${(r.height / E.h).toFixed(5)})` });
       surface.appendChild(exp);
       const mc = [...mini.querySelectorAll(".fc-day")], sc = [...exp.querySelectorAll(".fc-day")];
       const deltas = mc.map((a, i) => {
