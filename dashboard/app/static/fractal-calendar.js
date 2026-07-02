@@ -1,37 +1,33 @@
-// fractal-calendar.js — a SEMANTIC-ZOOM year: the whole year renders as 12 glass month buckets,
-// and a gentle continuous zoom (one GPU transform — no per-frame layout) glides toward wherever
-// the cursor points. Cross the zoom BOUNDARY and the calendar infers which bucket you were
-// heading into, loads that container as a REAL full-size view (month → its day buckets; a day →
-// its own bucket), and morphs it seamlessly from the bucket's on-screen rect to fill the
-// viewport (a FLIP transition). Zooming back out reverses the morph, landing you exactly where
-// you left the outer level. One year for now.
+// fractal-calendar.js — FRACTAL BUCKETS with per-level LOD.
 //
-// While zooming, the anchor DRIFTS toward the viewport centre as z rises, so the thing you're
-// zooming into self-centres instead of getting cut off at the edge — and by the time the
-// boundary trips, the inferred bucket morphs from (near) centre.
+// ONE bucket style — the ticketing pipeline zone, verbatim — at every level of the fractal:
+// the year is 12 month buckets; a month is a bucket of day buckets; a day is a bucket of
+// (future) cards. Same 16px corners, same 1px border, same glass, same header recipe, fixed,
+// all the way down. No intermediate "near" states — LOD is simply which level you're looking at.
 //
-// Design system: the ticketing client's bucket glass, is-target hover glow, easing and z-order
-// recipes — the modules read as one ecosystem. Every month/day is a bucket surface (data-date +
-// .fc-day-body) ready to hold cards from the other modules.
+// Zooming leans the camera gently toward the cursor (one composited transform). Crossing the
+// lean ceiling EXPANDS the bucket under the gesture into the full window: a REAL bucket whose
+// rect animates while its trim stays fixed — it is a proper bucket at every frame, nothing is
+// scaled, nothing goes blurry, the acrylic never switches off. Scrolling back out contracts it
+// into its slot and crossfades onto its pixel-identical twin.
 (() => {
   const YEAR = 2026;                          // one year for now
-  const TOP = 64, MARGIN = 18;                // the same workspace band the pipeline buckets used
   const EASE = "cubic-bezier(.22, 1, .26, 1)";
-  const MORPH_MS = 520;                       // the focus/unfocus morph duration
-  const HANDOFF = [2.6, 2.4, 1.35];           // per-level zoom ceiling: crossing it focuses the bucket under the cursor
-  const BACKOFF = 0.9;                        // zooming below this at a focused level morphs back out
+  const MORPH_MS = 460;                       // expand/contract duration
+  const LEAN_MAX = 1.5;                       // lean ceiling — crossing it expands the target bucket
   const MONTHS = ["January", "February", "March", "April", "May", "June",
                   "July", "August", "September", "October", "November", "December"];
-  const DOW = ["S", "M", "T", "W", "T", "F", "S"];
+  const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const DOW_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-  let viewport = null;
+  let surface = null;
   let level = 0;                              // 0 = year, 1 = a month, 2 = a day
-  let layers = [null, null, null];            // the live element per level (year layer persists; stages build on demand)
-  let saved = [null, null];                   // the outer level's {z,sx,sy, srcTransform} captured at each focus
+  let layers = [null, null, null];            // the live element per level (year layer persists)
+  let srcSel = [null, null];                  // how to find the slot each expander contracts back into
   let transitioning = false;
-  let gz = 1, gsx = 0, gsy = 0;               // the target zoom + pan; a CSS transition glides the layer to it
-  let settleTimer = 0;                        // fires after the last wheel notch → glass + sharp raster return
+  let gz = 1, gsx = 0, gsy = 0;               // the current level's lean (target values; CSS transition glides)
+  let settleTimer = 0;
+  let anchorC = null, lastCur = { x: -1, y: -1 }, lastWheelT = 0;
 
   const clampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   const daysIn = (m) => new Date(YEAR, m + 1, 0).getDate();
@@ -44,170 +40,124 @@
     const style = document.createElement("style");
     style.id = "fractal-calendar-styles";
     style.textContent = `
-      .fc-cal { position: fixed; left: ${MARGIN}px; right: ${MARGIN}px; top: ${TOP}px; bottom: ${MARGIN}px;
-        z-index: 800; overflow: hidden; border-radius: 18px; pointer-events: auto; -webkit-app-region: no-drag; }
-      /* Levels are absolute layers; zoom/pan is ONE composited transform on the active layer. */
-      .fc-layer { position: absolute; inset: 0; transform-origin: 0 0; }
-      .fc-year { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr);
-        gap: 14px; padding: 2px; box-sizing: border-box; }
-
-      /* ── ONE month-grid blueprint, shared by BOTH LODs ─────────────────────────────────────
-         The year-level mini month and the focused month view render the SAME structure with every
-         internal dimension in PERCENTAGES of the bucket box (header band 9%, dow row 5.5%, an
-         always-6-row day grid, %-gaps, %-insets). The mini is therefore a pixel-perfect scale
-         model of the full view — when the morph lands, every cell aligns edge to edge, and day
-         buckets are identical across all twelve months. Text sizes differ per LOD (.fc-full);
-         geometry never does. */
-      .fc-month { position: relative; }   /* the stage is a .fc-layer (absolute, inset 0) — don't override it */
-      /* ONE frost pass for the whole year layer: a single backdrop-blur element clipped to the 12
-         bucket shapes (12 separate backdrop passes per frame was the fps ceiling). It lives inside
-         the transformed layer, so the acrylic rides the zoom continuously — never switched off. */
-      .fc-frost { position: absolute; inset: 0; z-index: 0; pointer-events: none;
+      /* Full-window surface: nothing is clipped by an invisible frame — content reaches the true
+         window edges. The container passes pointer events through (the top strip keeps working);
+         the grid and expanded buckets re-enable them. */
+      .fc-surface { position: fixed; inset: 0; z-index: 800; pointer-events: none; -webkit-app-region: no-drag; overflow: hidden; }
+      .fc-level { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
+      .fc-grid { position: absolute; inset: 56px 14px 14px; display: grid; pointer-events: auto;
+        grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr); gap: 14px; }
+      /* ONE frost pass for the whole year layer, clipped to the 12 bucket shapes — the acrylic
+         rides the zoom continuously and costs one backdrop pass instead of twelve. */
+      .fc-frost { position: absolute; inset: 0; pointer-events: none;
         -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); }
-      /* EVERY px-based dimension is calc(base × --kx/--ky): the mini has k=1; a focused stage gets
-         the exact mini→stage scale factors per axis, so borders, radii and shadows land at the SAME
-         screen pixels as the mini's when the morph starts — geometry parity is by construction. */
-      /* Padding is k-scaled px, NOT percentages: %-padding resolves against WIDTH even vertically,
-         which breaks vertical parity under the morph's non-uniform scale (bucket aspect ≠ viewport). */
-      .fc-month, .fc-stage { box-sizing: border-box; display: flex; flex-direction: column;
-        min-height: 0; color: #fff; overflow: hidden;
-        padding: calc(7px * var(--ky, 1)) calc(9px * var(--kx, 1)) calc(9px * var(--ky, 1));
-        border-radius: calc(16px * var(--kx, 1)) / calc(16px * var(--ky, 1));
-        background: linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
-        border: solid rgba(255,255,255,0.14);
-        border-width: calc(1px * var(--ky, 1)) calc(1px * var(--kx, 1));
-        box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.18),
-          0 calc(18px * var(--ky, 1)) calc(42px * var(--ky, 1)) rgba(0,0,0,0.28); }
-      /* A focused stage IS a single bucket → its own single backdrop pass. */
-      .fc-stage { -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); }
-      .fc-mg-hd { flex: 0 0 9%; display: flex; align-items: center; gap: 2.5%;
-        font-size: 0.62rem; font-weight: 800; letter-spacing: .01em; color: rgba(255,255,255,0.9);
-        opacity: 0; transition: opacity .3s ease; }
-      .fc-full .fc-mg-hd { font-size: 1.3rem; opacity: 1; }
-      .fc-mg-year { font-size: 0.72em; font-weight: 600; color: rgba(255,255,255,0.42); }
-      .fc-mg-dow { flex: 0 0 5.5%; display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 1.6%;
-        align-items: center; opacity: 0; transition: opacity .3s ease; }
-      .fc-full .fc-mg-dow { opacity: 1; }
-      .fc-mg-dow span { text-align: center; font-size: 0.42rem; font-weight: 700; color: rgba(255,255,255,0.4); }
-      .fc-full .fc-mg-dow span { font-size: 0.74rem; }
-      .fc-mg-days { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr);
-        grid-template-rows: repeat(6, 1fr); column-gap: 1.6%; row-gap: 2.4%; transition: opacity .3s ease; }
-      /* A day is a bucket — translucent fill (no backdrop blur: 365 must stay cheap). Its border,
-         radius and highlight scale by the SAME --k factors, so a staged month's cells are
-         pixel-identical to the mini's at the morph moment. */
-      .fc-day { position: relative; min-height: 0; overflow: hidden;
-        border-radius: calc(6px * var(--kx, 1)) / calc(6px * var(--ky, 1));
-        background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035));
-        border: solid rgba(255,255,255,0.10);
-        border-width: calc(1px * var(--ky, 1)) calc(1px * var(--kx, 1));
-        box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.08);
-        transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
-      .fc-full .fc-day { cursor: pointer; }
-      .fc-day-num { position: absolute; top: 6%; left: 7%; font-size: 0.5rem; font-weight: 700;
-        color: rgba(255,255,255,0.78); line-height: 1; transition: opacity .3s ease; }
-      .fc-full .fc-day-num { font-size: 0.95rem; }
-      .fc-day-dow { position: absolute; top: 6%; right: 7%; font-size: 0.68rem; font-weight: 600;
-        color: rgba(255,255,255,0.38); line-height: 1; }
-      .fc-day-body { position: absolute; inset: 26% 5% 5% 5%; }   /* the bucket surface — cards land here later */
-      .fc-today { border-color: rgba(125,180,255,0.85);
-        box-shadow: inset 0 0 0 calc(1px * var(--ky, 1)) rgba(125,180,255,0.45),
-          0 0 calc(14px * var(--ky, 1)) rgba(90,150,255,0.3); }
 
-      /* At YEAR level the MONTH is the object: days are inert texture (not hover targets — they
-         aren't real at this abstraction), the bucket itself glows as the target. */
-      .fc-year .fc-day { pointer-events: none; }
-      .fc-year .fc-month { cursor: pointer; }
-      .fc-year .fc-month:hover { border-color: rgba(125,180,255,0.92);
-        box-shadow: inset 0 0 0 1px rgba(125,180,255,0.5), 0 0 30px rgba(90,150,255,0.42),
-          inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 42px rgba(0,0,0,0.28); }
-      /* Days become real, interactive buckets only INSIDE the focused month view. */
-      .fc-monthview .fc-day:hover { border-color: rgba(125,180,255,0.92);
+      /* ── THE bucket — the ticketing pipeline zone, verbatim. Fixed trim at every level. ── */
+      .fc-bucket { position: relative; box-sizing: border-box; display: flex; flex-direction: column; min-height: 0;
+        overflow: hidden; border-radius: 16px; padding: 12px 14px 14px; color: #fff;
+        background: linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
+        border: 1px solid rgba(255,255,255,0.14);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 42px rgba(0,0,0,0.28);
+        transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+      /* The zone header, verbatim. */
+      .fc-hd { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+        padding: 2px 4px 11px; font-size: 0.98rem; font-weight: 700; line-height: 1.25; letter-spacing: .01em;
+        color: rgba(255,255,255,0.85); white-space: nowrap; }
+      /* The zone count-pill recipe carries the year / weekday sub-labels. */
+      .fc-pill { flex: 0 0 auto; font-size: 0.72rem; font-weight: 600; color: rgba(255,255,255,0.62);
+        background: rgba(255,255,255,0.10); border-radius: 999px; padding: 1px 8px; }
+      .fc-dowrow { flex: 0 0 auto; display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; padding: 0 0 6px; }
+      .fc-dowrow span { text-align: center; font-size: 0.6rem; font-weight: 700; color: rgba(255,255,255,0.4);
+        white-space: nowrap; overflow: hidden; }
+      .fc-days { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr);
+        grid-template-rows: repeat(6, 1fr); gap: 6px; }
+      /* A day bucket: the same family, sized down — translucent fill (it sits on the month's
+         glass), 1px border, fixed radius. Identical at every level it appears. */
+      .fc-day { position: relative; min-height: 0; border-radius: 10px; overflow: hidden;
+        background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035));
+        border: 1px solid rgba(255,255,255,0.10);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+        transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+      .fc-day-num { position: absolute; top: 4px; left: 7px; font-size: 0.68rem; font-weight: 700;
+        color: rgba(255,255,255,0.78); line-height: 1; }
+      .fc-day-body { position: absolute; inset: 22px 6px 6px; }
+      .fc-today { border-color: rgba(125,180,255,0.85);
+        box-shadow: inset 0 0 0 1px rgba(125,180,255,0.45), 0 0 14px rgba(90,150,255,0.3); }
+      /* The zone empty-state, verbatim ("Drag tickets here" → cards). */
+      .fc-empty { width: 100%; margin: auto 0; padding: 14px 8px; text-align: center;
+        color: rgba(255,255,255,0.38); font-size: 0.8rem; line-height: 1.4; }
+
+      /* Level semantics: at the YEAR the month is the object (days are texture); inside a month
+         the day buckets are the objects — wearing the pipeline's is-target glow on hover. */
+      .fc-surface[data-level="0"] .fc-day { pointer-events: none; }
+      .fc-surface[data-level="0"] .fc-month { cursor: pointer; }
+      .fc-surface[data-level="0"] .fc-month:hover { border-color: rgba(125,180,255,0.92);
+        background: linear-gradient(180deg, rgba(70,110,190,0.34), rgba(40,70,130,0.26));
+        box-shadow: inset 0 0 0 1px rgba(125,180,255,0.5), 0 0 30px rgba(90,150,255,0.42); }
+      .fc-expander[data-kind="month"] .fc-day { cursor: pointer; pointer-events: auto; }
+      .fc-expander[data-kind="month"] .fc-day:hover { border-color: rgba(125,180,255,0.92);
         background: linear-gradient(180deg, rgba(70,110,190,0.34), rgba(40,70,130,0.26));
         box-shadow: inset 0 0 0 1px rgba(125,180,255,0.5), 0 0 18px rgba(90,150,255,0.35); }
 
-      /* Zoomed OUT: the month is its NAME in the centre over the day texture; approaching the
-         boundary the name fades and "writes itself" into the header band (same band the month
-         view's header occupies — the morph hands one straight to the other). */
-      .fc-month-big { position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center;
-        font-size: 1.9rem; font-weight: 800; letter-spacing: .02em; color: rgba(255,255,255,0.88);
-        text-shadow: 0 2px 14px rgba(0,0,0,0.55); pointer-events: none; opacity: 1; transition: opacity .3s ease; }
-      .fc-cal[data-lod="near"] .fc-month-big { opacity: 0; }
-      .fc-cal[data-lod="near"] .fc-year .fc-mg-hd { opacity: 1; }
-      .fc-cal[data-lod="year"] .fc-day-num { opacity: 0; }
-      .fc-cal[data-lod="year"] .fc-mg-days { opacity: 0.55; }
-
-      /* The DAY view mirrors a day CELL exactly: the cell's radius/border/fill bases (× the
-         compounded --k factors) and the cell's translucent-white fill layered over the month
-         glass, so the morph from cell to day view is pixel-continuous too. */
-      .fc-dayview { border-radius: calc(6px * var(--kx, 1)) / calc(6px * var(--ky, 1));
-        border-color: rgba(255,255,255,0.10);
-        background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035)),
-          linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
-        box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.08); }
-      .fc-dayview .fc-dv-num { position: absolute; top: 6%; left: 7%; font-size: 2.1rem; font-weight: 800;
-        line-height: 1; color: rgba(255,255,255,0.9); }
-      .fc-dayview .fc-dv-sub { position: absolute; top: 7%; right: 7%; font-size: 1rem; font-weight: 600;
-        color: rgba(255,255,255,0.45); line-height: 1; }
-      .fc-dayview-body { position: absolute; inset: 26% 5% 5% 5%; border-radius: 14px;
-        background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.025));
-        border: 1px dashed rgba(210, 227, 255, 0.35); }
-
-      /* PERF: layers stay GPU-promoted permanently — promoting on gesture start cost a ~300ms
-         hitch. While the camera moves, backdrop blur is swapped for a matched near-opaque fill
-         (re-blurring 12 panels per frame is what killed the fps); at rest the glass returns and a
-         two-frame demote/repromote (in idle time) re-rasterises the layer tack-sharp. */
-      .fc-layer { will-change: transform; }
-      /* The acrylic NEVER switches off — no flashes. The frost scales with the bucket like every
-         other dimension (--fc-blur is k-scaled per stage), so a bucket looks like the SAME bucket
-         at every zoom level: same glass, same corners, same borders, same proportions. */
-      /* During a morph only the TEXT/detail crossfades — the containers are pixel-identical, so
-         the swap itself is invisible. */
-      .fc-textfade .fc-mg-hd, .fc-textfade .fc-mg-dow, .fc-textfade .fc-day-num, .fc-textfade .fc-day-dow,
-      .fc-textfade .fc-dv-num, .fc-textfade .fc-dv-sub, .fc-textfade .fc-dayview-body { opacity: 0 !important; }
-      .fc-day-dow, .fc-dv-num, .fc-dv-sub, .fc-dayview-body { transition: opacity .3s ease; }
+      /* The expander: the SAME bucket, laid out at its FINAL size from frame one (standard trim,
+         one layout, one backdrop pass), travelling between its slot and the window on a composited
+         transform — so the motion runs on the GPU and it lands at scale 1 as a byte-standard
+         bucket, pixel-identical to its twin in the grid. */
+      .fc-expander { position: absolute; z-index: 5; left: 0; top: 0; pointer-events: auto;
+        transform-origin: 0 0; will-change: transform;
+        padding: 52px 20px 20px;   /* interior clearance for the floating window controls */
+        -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); }
     `;
     document.head.appendChild(style);
   };
 
-  // ── Builders ────────────────────────────────────────────────────────────────
-  const dayCellHTML = (m, d, withDow) => {
+  // ── Builders — the same structure at every size (the interior reflows; nothing scales) ──
+  const dayCellHTML = (m, d) => {
     const date = iso(m, d);
-    const dow = withDow ? `<span class="fc-day-dow">${DOW_FULL[new Date(YEAR, m, d).getDay()].slice(0, 3)}</span>` : "";
     return `<div class="fc-day${date === todayIso ? " fc-today" : ""}" data-date="${date}"` +
       (d === 1 ? ` style="grid-column-start:${firstDow(m) + 1}"` : "") +
-      `><span class="fc-day-num">${d}</span>${dow}<div class="fc-day-body"></div></div>`;
+      `><span class="fc-day-num">${d}</span><div class="fc-day-body"></div></div>`;
   };
-
-  // The SHARED month grid — the year-level mini and the focused view render this exact structure,
-  // so one is a perfect scale model of the other (every dimension inside it is a percentage).
-  const mgridHTML = (m, full) =>
-    `<div class="fc-mg-hd"><span class="fc-mg-name">${MONTHS[m]}</span>${full ? `<span class="fc-mg-year">${YEAR}</span>` : ""}</div>` +
-    `<div class="fc-mg-dow">${(full ? DOW_FULL.map((d) => d.slice(0, 3)) : DOW).map((d) => `<span>${d}</span>`).join("")}</div>` +
-    `<div class="fc-mg-days">${Array.from({ length: daysIn(m) }, (_, i) => dayCellHTML(m, i + 1, full)).join("")}</div>`;
+  const monthInnerHTML = (m, expanded) =>
+    `<div class="fc-hd"><span>${MONTHS[m]}</span>${expanded ? `<span class="fc-pill">${YEAR}</span>` : ""}</div>` +
+    `<div class="fc-dowrow">${DOW.map((d) => `<span>${d}</span>`).join("")}</div>` +
+    `<div class="fc-days">${Array.from({ length: daysIn(m) }, (_, i) => dayCellHTML(m, i + 1)).join("")}</div>`;
+  const dayInnerHTML = (date) => {
+    const [, mo, da] = date.split("-").map(Number);
+    const d = new Date(YEAR, mo - 1, da);
+    return `<div class="fc-hd"><span>${MONTHS[mo - 1]} ${da}</span><span class="fc-pill">${DOW_FULL[d.getDay()]}, ${YEAR}</span></div>` +
+      `<div class="fc-empty" data-date="${date}">Drag cards here</div>`;
+  };
 
   const buildYear = () => {
     const el = document.createElement("div");
-    el.className = "fc-layer fc-year";
+    el.className = "fc-level";
     const frost = document.createElement("div");
     frost.className = "fc-frost";
-    el.appendChild(frost);   // first child → the buckets paint over their shared frost
+    el.appendChild(frost);
+    const grid = document.createElement("div");
+    grid.className = "fc-grid";
     for (let m = 0; m < 12; m++) {
       const month = document.createElement("div");
-      month.className = "fc-month";
+      month.className = "fc-bucket fc-month";
       month.dataset.month = String(m + 1);
-      month.innerHTML = mgridHTML(m, false) + `<div class="fc-month-big">${MONTHS[m]}</div>`;
-      el.appendChild(month);
+      month.innerHTML = monthInnerHTML(m, false);
+      grid.appendChild(month);
     }
+    el.appendChild(grid);
     return el;
   };
 
-  // Clip the year layer's single frost pass to the 12 bucket shapes (rounded rects in layer-layout
-  // coordinates — the clip rides the zoom transform with the layer).
+  // Clip the year layer's single frost pass to the 12 bucket shapes (layer-layout coords — the
+  // clip rides the lean transform with the layer).
   const layoutFrost = () => {
     const yearEl = layers[0]; if (!yearEl) return;
-    const frost = yearEl.querySelector(":scope > .fc-frost"); if (!frost) return;
-    const parts = [...yearEl.querySelectorAll(":scope > .fc-month")].map((m) => {
-      const x = m.offsetLeft, y = m.offsetTop, w = m.offsetWidth, h = m.offsetHeight;
+    const frost = yearEl.querySelector(":scope > .fc-frost");
+    const grid = yearEl.querySelector(":scope > .fc-grid");
+    if (!frost || !grid) return;
+    const gx = grid.offsetLeft, gy = grid.offsetTop;
+    const parts = [...grid.children].map((m) => {
+      const x = gx + m.offsetLeft, y = gy + m.offsetTop, w = m.offsetWidth, h = m.offsetHeight;
       const r = Math.min(16, w / 2, h / 2);
       return `M ${x + r} ${y} L ${x + w - r} ${y} A ${r} ${r} 0 0 1 ${x + w} ${y + r} ` +
         `L ${x + w} ${y + h - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} L ${x + r} ${y + h} ` +
@@ -216,89 +166,41 @@
     frost.style.clipPath = `path('${parts.join(" ")}')`;
   };
 
-  // A month LOADED as its own container: the same blueprint at real full size (.fc-full only
-  // changes TEXT sizes — the geometry is identical, so the morph lands cell-on-cell).
-  const buildMonthView = (m) => {
-    const el = document.createElement("div");
-    el.className = "fc-layer fc-stage fc-monthview fc-full";
-    el.dataset.month = String(m + 1);
-    el.innerHTML = mgridHTML(m, true);
-    return el;
-  };
-
-  // A single day as its own bucket view — anatomy mirrors the day cell (number top-left, weekday
-  // top-right, body at the same %-insets) so the morph aligns with the cell it grows out of.
-  const buildDayView = (date) => {
-    const [, mo, da] = date.split("-").map(Number);
-    const d = new Date(YEAR, mo - 1, da);
-    const el = document.createElement("div");
-    el.className = "fc-layer fc-stage fc-dayview";
-    el.dataset.date = date;
-    el.innerHTML =
-      `<span class="fc-dv-num">${da}</span>` +
-      `<span class="fc-dv-sub">${DOW_FULL[d.getDay()]}, ${MONTHS[mo - 1]} ${YEAR}</span>` +
-      `<div class="fc-dayview-body" data-date="${date}"></div>`;
-    return el;
-  };
-
-  // ── Zoom / pan on the ACTIVE layer (one composited transform — cheap) ──────
-  const resetZoom = () => { gz = 1; gsx = gsy = 0; };
-  const setMoving = (on) => viewport.classList.toggle("fc-moving", on);
-  // The glide is COMPOSITOR-DRIVEN: each wheel notch retargets a short CSS transition, so the GPU
-  // scales the cached raster at full frame rate (a rAF loop re-rasterised 377 painted nodes per
-  // frame — that was the fps killer). At rest the raster re-sharpens and the glass returns.
+  // ── The lean: one composited transform, cursor-anchored, gently centre-drifting ─────────
   const apply = (animate) => {
     const el = layers[level]; if (!el) return;
     el.style.transition = animate ? `transform 300ms cubic-bezier(.25, .46, .45, .94)` : "none";
     el.style.transform = `translate(${-gsx}px, ${-gsy}px) scale(${gz})`;
-    // Constant EFFECTIVE frost: the local radius counter-scales the zoom so every bucket wears the
-    // same 28px acrylic at every level — never switched off (no flashing), and the blur cost stays
-    // bounded instead of exploding with z.
-    viewport.style.setProperty("--fc-blur", `${(28 / gz).toFixed(1)}px`);
-    if (level === 0) {
-      const lod = gz < 1.6 ? "year" : "near";
-      if (viewport.dataset.lod !== lod) viewport.dataset.lod = lod;
-    }
+    surface.style.setProperty("--fc-blur", `${(28 / gz).toFixed(1)}px`);   // constant effective frost
+  };
+  const clampS = () => {
+    gsx = clampN(gsx, 0, window.innerWidth * (gz - 1));
+    gsy = clampN(gsy, 0, window.innerHeight * (gz - 1));
   };
   const scheduleSettle = () => {
     clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
       if (transitioning) return;
       const el = layers[level]; if (el) el.style.transition = "none";
-      setMoving(false);
-      // A two-frame demote/re-promote (idle time — the gesture is over) forces a raster at the
-      // final scale, so text is tack-sharp without a promotion hitch on the NEXT gesture.
+      // idle-time demote/re-promote → raster at the final scale, tack-sharp, no next-gesture hitch
       requestAnimationFrame(() => requestAnimationFrame(() => {
-        if (viewport.classList.contains("fc-moving") || transitioning) return;
+        if (transitioning) return;
         const l = layers[level]; if (!l) return;
         l.style.willChange = "auto";
         requestAnimationFrame(() => { l.style.willChange = ""; });
       }));
     }, 340);
   };
-  const clampS = () => {
-    const r = viewport.getBoundingClientRect();
-    // Soft edges: as z approaches the boundary the clamp loosens, letting an edge/corner bucket
-    // drift to the centre (the morph re-frames everything perfectly anyway).
-    const pad = clampN((gz - 1) / (HANDOFF[level] - 1), 0, 1) * r.width * 0.22;
-    gsx = clampN(gsx, -pad, Math.max(-pad, r.width * gz - r.width + pad));
-    gsy = clampN(gsy, -pad, Math.max(-pad, r.height * gz - r.height + pad));
-  };
 
-  // The gesture's TARGET is locked when the zoom gesture starts: the world point under the cursor
-  // at that moment. Every notch drifts THAT point toward the centre (recomputing per-notch would
-  // compound past the target), and the boundary infers the bucket CONTAINING it — i.e. the bucket
-  // you were heading into when you started zooming.
-  let anchorC = null, lastCur = { x: -1, y: -1 }, lastWheelT = 0;
-  const layerOffset = (el, stopAt) => {   // base-layout position of el within its layer (unzoomed px)
+  // Which bucket holds the gesture's locked anchor point (layer-layout coords).
+  const layerOffset = (el, stopAt) => {
     let x = 0, y = 0;
     for (let n = el; n && n !== stopAt; n = n.offsetParent) { x += n.offsetLeft; y += n.offsetTop; }
     return { x, y };
   };
-  // Which bucket CONTAINS the gesture's world point (base-layout coords), else the nearest one.
   const targetAt = (cx, cy) => {
     const sel = level === 0 ? ".fc-month" : ".fc-day";
-    let best = null, bd = Infinity, hit = null;
+    let hit = null, best = null, bd = Infinity;
     layers[level].querySelectorAll(sel).forEach((el) => {
       const o = layerOffset(el, layers[level]);
       const w = el.offsetWidth, h = el.offsetHeight;
@@ -309,179 +211,146 @@
     return hit || best;
   };
 
-  // Pixel-parity factors: the stage's box is the mini bucket's box grown by (vp/miniLayout) per
-  // axis — every px dimension inside it multiplies by these, so at the morph's first frame the
-  // stage's borders/radii/shadows occupy the SAME screen pixels as the mini's.
-  const setParityVars = (stage, srcEl) => {
-    const vr = viewport.getBoundingClientRect();
-    const lr = layers[level].getBoundingClientRect();
-    const sr = srcEl.getBoundingClientRect();
-    // layout (untransformed) size of the source bucket = its on-screen size ÷ the layer's scale
-    const lw = sr.width / (lr.width / vr.width), lh = sr.height / (lr.height / vr.height);
-    // COMPOUND the outer layer's factors: a day cell inside a focused month already wears the
-    // month's k (its 1px border is k layout px), so the day view must grow from THAT base.
-    const pk = layers[level].style;
-    const pkx = parseFloat(pk.getPropertyValue("--kx")) || 1, pky = parseFloat(pk.getPropertyValue("--ky")) || 1;
-    const kx = pkx * (vr.width / lw), ky = pky * (vr.height / lh);
-    stage.style.setProperty("--kx", kx.toFixed(4));
-    stage.style.setProperty("--ky", ky.toFixed(4));
-  };
-
-  // ── The seamless boundary: FLIP the focused container in/out ───────────────
-  const focusIn = (targetEl) => {
+  // ── Expand: the bucket under the gesture becomes the window ─────────────────────────────
+  const expand = (targetEl) => {
     transitioning = true;
-    setMoving(true);
-    const vr = viewport.getBoundingClientRect();
-    const r = targetEl.getBoundingClientRect();
-    const stage = level === 0 ? buildMonthView(+targetEl.dataset.month - 1) : buildDayView(targetEl.dataset.date);
-    setParityVars(stage, targetEl);
-    // The incoming container starts EXACTLY over the bucket it grows from — pixel-identical
-    // (geometry, borders, corners, fill AND frost are all k-scaled), so it enters at FULL opacity:
-    // there is nothing to crossfade except the text, which eases in on its own.
-    const srcTransform = `translate(${r.left - vr.left}px, ${r.top - vr.top}px) scale(${r.width / vr.width}, ${r.height / vr.height})`;
-    stage.style.transformOrigin = "0 0";
-    stage.style.transform = srcTransform;
-    // Frost continuity: at frame 0 the stage's EFFECTIVE blur equals the bucket's constant 28px
-    // (local radius ÷ its initial scale); the inline override is dropped once it fills the view.
-    stage.style.setProperty("--fc-blur", `${(28 / (r.width / vr.width)).toFixed(1)}px`);
-    stage.classList.add("fc-textfade");
-    viewport.appendChild(stage);
-    void stage.offsetWidth;
-    // The outer layer rides the SAME per-axis trajectory (bucket rect → viewport, non-uniform),
-    // so the bucket stays pinned beneath its full-size self the whole way — one camera move, the
-    // neighbours flying off screen around it, no fades, no flash.
+    const r = targetEl.getBoundingClientRect();   // live rect (leaned)
+    const W = window.innerWidth, H = window.innerHeight;
+    const isMonth = level === 0;
+    const exp = document.createElement("div");
+    exp.className = "fc-bucket fc-expander";
+    exp.dataset.kind = isMonth ? "month" : "day";
+    if (isMonth) { exp.dataset.month = targetEl.dataset.month; exp.innerHTML = monthInnerHTML(+targetEl.dataset.month - 1, true); }
+    else { exp.dataset.date = targetEl.dataset.date; exp.innerHTML = dayInnerHTML(targetEl.dataset.date); }
+    srcSel[level] = isMonth ? `.fc-month[data-month="${targetEl.dataset.month}"]` : `.fc-day[data-date="${targetEl.dataset.date}"]`;
+    // FINAL layout from frame one; a composited transform maps it onto its slot…
+    Object.assign(exp.style, { width: `${W}px`, height: `${H}px`, opacity: "0",
+      transform: `translate(${r.left}px, ${r.top}px) scale(${r.width / W}, ${r.height / H})` });
+    surface.appendChild(exp);
+    void exp.offsetWidth;
+    // …then glides to identity (GPU-only motion) while the outer level settles to rest beneath it
+    exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.35)}ms ease`;
+    exp.style.transform = "none";
+    exp.style.opacity = "1";
     const below = layers[level];
-    saved[level] = { z: gz, sx: gsx, sy: gsy, srcTransform };
-    const bx = (r.left - vr.left + gsx) / gz, by = (r.top - vr.top + gsy) / gz;   // bucket in layer-layout coords
-    const bw = r.width / gz, bh = r.height / gz;
-    const KX = vr.width / bw, KY = vr.height / bh;
+    gz = 1; gsx = 0; gsy = 0;
     below.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
-    below.style.transform = `translate(${-bx * KX}px, ${-by * KY}px) scale(${KX}, ${KY})`;
-    stage.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
-    stage.style.transform = "translate(0px, 0px) scale(1, 1)";
-    stage.classList.remove("fc-textfade");   // text eases in via its own .3s opacity transitions
+    below.style.transform = "translate(0px, 0px) scale(1)";
     setTimeout(() => {
-      below.style.display = "none"; below.style.transition = "";
-      stage.style.transition = "";
-      stage.style.removeProperty("--fc-blur");   // back to the inherited constant-28px frost
-      level += 1; layers[level] = stage;
-      resetZoom(); apply(false);
-      setMoving(false);
+      exp.style.transition = "none";
+      below.style.transition = "none";
+      below.style.visibility = "hidden";          // parked at identity — the exact contract target
+      level += 1;
+      layers[level] = exp;
+      surface.dataset.level = String(level);
+      gz = 1; gsx = 0; gsy = 0;
+      surface.style.setProperty("--fc-blur", "28px");
       transitioning = false;
     }, MORPH_MS + 30);
   };
 
-  const focusOut = () => {
+  // ── Contract: back into the slot, crossfading onto its pixel-identical twin ─────────────
+  const contract = () => {
     transitioning = true;
-    setMoving(true);
-    anchorC = null;   // a new level = a new gesture context
-    const stage = layers[level];
+    const exp = layers[level];
     const below = layers[level - 1];
-    const back = saved[level - 1];
-    below.style.display = "";                 // still parked deep inside the bucket — exactly beneath the stage
-    void below.offsetWidth;
-    below.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
-    below.style.transform = `translate(${-back.sx}px, ${-back.sy}px) scale(${back.z})`;
-    stage.classList.add("fc-textfade");       // only the text eases out — the container is its bucket's twin
-    // Frost continuity on the way out: the local radius that lands at EXACTLY 28px effective when
-    // the stage settles into the bucket (radius ÷ destination scale).
-    const dstScale = parseFloat(back.srcTransform.match(/scale\(([\d.]+)/)?.[1] || "1");
-    stage.style.setProperty("--fc-blur", `${(28 / dstScale).toFixed(1)}px`);
-    stage.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
-    stage.style.transform = back.srcTransform;   // shrinks back into the bucket it came from, in lockstep
+    below.style.visibility = "";                  // parked at identity → the slot rect is exact
+    const src = below.querySelector(srcSel[level - 1]);
+    const r = src ? src.getBoundingClientRect() : { left: window.innerWidth / 2, top: window.innerHeight / 2, width: 10, height: 10 };
+    const W = window.innerWidth, H = window.innerHeight;
+    exp.style.transform = "none";                 // shed any lean before travelling home
+    void exp.offsetWidth;
+    // travel home on the compositor; crossfade onto the pixel-identical twin over the last stretch
+    exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.45)}ms ease ${Math.round(MORPH_MS * 0.55)}ms`;
+    exp.style.transform = `translate(${r.left}px, ${r.top}px) scale(${r.width / W}, ${r.height / H})`;
+    exp.style.opacity = "0";
     setTimeout(() => {
-      stage.remove(); layers[level] = null;
-      below.style.transition = "";
+      exp.remove();
+      layers[level] = null;
       level -= 1;
-      gz = back.z; gsx = back.sx; gsy = back.sy;
-      apply(false);
-      setMoving(false);
+      surface.dataset.level = String(level);
+      gz = 1; gsx = 0; gsy = 0;
+      surface.style.setProperty("--fc-blur", "28px");
+      anchorC = null;
       transitioning = false;
     }, MORPH_MS + 30);
   };
 
-  // ── Wheel: continuous zoom with a centre-drifting anchor + the boundary trigger ─
+  // ── Wheel: lean toward the cursor; the ceiling expands, the floor contracts ─────────────
   const onWheel = (e) => {
     e.preventDefault();
     if (transitioning) return;
-    const r = viewport.getBoundingClientRect();
-    const px = e.clientX - r.left, py = e.clientY - r.top;
+    const px = e.clientX, py = e.clientY;
     const zoomingIn = e.deltaY < 0;
-    // Boundary out: below the floor at a focused level → morph back to the outer container.
-    if (!zoomingIn && level > 0 && gz <= BACKOFF + 0.02) { focusOut(); return; }
-    const nz = clampN(gz * Math.exp(-e.deltaY * 0.0022), level > 0 ? BACKOFF : 1, HANDOFF[level]);
-    // A NEW gesture (pause, or the cursor moved off) re-locks the anchor: the world point under
-    // the cursor right now — the thing you're pointing at.
+    if (!zoomingIn && gz <= 1.001 && level > 0) { contract(); return; }
+    const nz = clampN(gz * Math.exp(-e.deltaY * 0.0022), 1, LEAN_MAX);
     const now = performance.now();
-    if (!anchorC || now - lastWheelT > 450 || Math.hypot(e.clientX - lastCur.x, e.clientY - lastCur.y) > 30) {
-      anchorC = { x: (px + gsx) / gz, y: (py + gsy) / gz };
+    if (!anchorC || now - lastWheelT > 450 || Math.hypot(px - lastCur.x, py - lastCur.y) > 30) {
+      anchorC = { x: (px + gsx) / gz, y: (py + gsy) / gz };   // lock the gesture's target point
     }
-    lastWheelT = now; lastCur = { x: e.clientX, y: e.clientY };
-    // The anchor DRIFTS to the viewport centre as z rises, so the target self-centres instead of
-    // getting clipped at an edge — by boundary time it (and the morph) sit near dead centre.
-    const bias = clampN((nz - 1) / (HANDOFF[level] - 1), 0, 1) * 0.9;
-    const ax = px + (r.width / 2 - px) * bias, ay = py + (r.height / 2 - py) * bias;
+    lastWheelT = now; lastCur = { x: px, y: py };
+    // the anchor drifts toward the centre as the lean deepens — the target self-centres
+    const bias = clampN((nz - 1) / (LEAN_MAX - 1), 0, 1) * 0.6;
+    const ax = px + (window.innerWidth / 2 - px) * bias, ay = py + (window.innerHeight / 2 - py) * bias;
     gsx = anchorC.x * nz - ax;
     gsy = anchorC.y * nz - ay;
     gz = nz;
     clampS();
-    // Boundary in: crossing the ceiling means "I want THAT bucket" — the one holding the gesture's
-    // locked anchor point → load its real container.
-    if (zoomingIn && gz >= HANDOFF[level] - 0.01 && level < 2) {
+    if (zoomingIn && gz >= LEAN_MAX - 0.01 && level < 2) {
       const t = targetAt(anchorC.x, anchorC.y);
       anchorC = null;
-      if (t) { focusIn(t); return; }
+      if (t) { expand(t); return; }
     }
-    setMoving(true);
     apply(true);
     scheduleSettle();
   };
 
-  // ── Boot ────────────────────────────────────────────────────────────────────
+  // ── Boot ────────────────────────────────────────────────────────────────────────────────
   const init = () => {
-    if (viewport) return;
+    if (surface) return;
     ensureStyles();
-    viewport = document.createElement("div");
-    viewport.className = "fc-cal";
-    viewport.dataset.lod = "year";
+    surface = document.createElement("div");
+    surface.className = "fc-surface";
+    surface.dataset.level = "0";
     layers[0] = buildYear();
-    viewport.appendChild(layers[0]);
-    document.body.appendChild(viewport);
-    viewport.addEventListener("wheel", onWheel, { passive: false });
-    window.addEventListener("resize", () => { clampS(); apply(); layoutFrost(); });
-    apply();
+    surface.appendChild(layers[0]);
+    document.body.appendChild(surface);
+    surface.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("resize", () => {
+      gz = 1; gsx = 0; gsy = 0; apply(false);
+      for (let i = 1; i <= level; i++) if (layers[i]) Object.assign(layers[i].style, { left: "0px", top: "0px", width: `${window.innerWidth}px`, height: `${window.innerHeight}px` });
+      layoutFrost();
+    });
+    apply(false);
     layoutFrost();
   };
+
   window.fractalCalendar = {
     year: YEAR,
     level: () => level,
     zoom: () => gz,
-    dayEl: (date) => viewport?.querySelector(`.fc-day[data-date="${date}"], .fc-dayview-body[data-date="${date}"]`) || null,
-    monthEl: (m) => viewport?.querySelector(`.fc-month[data-month="${m}"], .fc-monthview[data-month="${m}"]`) || null,
-    // Parity harness: stage the month view over its mini at the CURRENT zoom (exactly as focusIn
-    // would) and measure every day cell's rect against its mini twin. worst < 0.5px = seamless.
-    _parity: (mIdx, opacity = 1) => {
+    dayEl: (date) => surface?.querySelector(`.fc-day[data-date="${date}"], .fc-empty[data-date="${date}"]`) || null,
+    monthEl: (m) => surface?.querySelector(`.fc-expander[data-month="${m}"], .fc-month[data-month="${m}"]`) || null,
+    // Landing-parity harness: place the expander at a month's slot at rest and diff every day
+    // cell's rect against the mini's — identical fixed styling should agree to ~0px.
+    _parity: (mIdx) => {
       const mini = layers[0].querySelector(`.fc-month[data-month="${mIdx}"]`);
-      const vr = viewport.getBoundingClientRect();
       const r = mini.getBoundingClientRect();
-      const stage = buildMonthView(mIdx - 1);
-      setParityVars(stage, mini);
-      stage.classList.add("fc-parity");
-      stage.style.transformOrigin = "0 0";
-      stage.style.transform = `translate(${r.left - vr.left}px, ${r.top - vr.top}px) scale(${r.width / vr.width}, ${r.height / vr.height})`;
-      stage.style.opacity = String(opacity);
-      viewport.appendChild(stage);
-      const mc = [...mini.querySelectorAll(".fc-day")], sc = [...stage.querySelectorAll(".fc-day")];
+      const exp = document.createElement("div");
+      exp.className = "fc-bucket fc-expander fc-parity";
+      exp.dataset.kind = "month";
+      exp.innerHTML = monthInnerHTML(mIdx - 1, true);
+      Object.assign(exp.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+      surface.appendChild(exp);
+      const mc = [...mini.querySelectorAll(".fc-day")], sc = [...exp.querySelectorAll(".fc-day")];
       const deltas = mc.map((a, i) => {
         const ra = a.getBoundingClientRect(), rb = sc[i].getBoundingClientRect();
         return [rb.left - ra.left, rb.top - ra.top, rb.right - ra.right, rb.bottom - ra.bottom].map((v) => +v.toFixed(2));
       });
       const worst = Math.max(...deltas.flat().map(Math.abs));
-      const hd = ((a, b) => [b.left - a.left, b.top - a.top, b.bottom - a.bottom].map((v) => +v.toFixed(2)))(
-        mini.querySelector(".fc-mg-hd").getBoundingClientRect(), stage.querySelector(".fc-mg-hd").getBoundingClientRect());
-      return { worst, headerDelta: hd, day1: deltas[0], day31: deltas[deltas.length - 1] };
+      return { worst, day1: deltas[0], day31: deltas[deltas.length - 1] };
     },
-    _parityClear: () => viewport.querySelectorAll(".fc-parity").forEach((el) => el.remove()),
+    _parityClear: () => surface.querySelectorAll(".fc-parity").forEach((el) => el.remove()),
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
