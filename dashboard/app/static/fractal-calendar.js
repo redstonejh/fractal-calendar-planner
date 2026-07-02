@@ -49,7 +49,9 @@
          the grid and expanded buckets re-enable them. */
       .fc-surface { position: fixed; inset: 0; z-index: 800; pointer-events: none; -webkit-app-region: no-drag; overflow: hidden; }
       .fc-level { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
-      .fc-grid { position: absolute; inset: 56px 14px 14px; display: grid; pointer-events: auto;
+      /* The grid is sized in JS so every bucket has EXACTLY the expanded view's aspect ratio —
+         the expand/contract morph is then a UNIFORM scale: nothing ever stretches. */
+      .fc-grid { position: absolute; display: grid; pointer-events: auto;
         grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr); gap: 14px; }
       /* ONE frost pass for the whole year layer, clipped to the 12 bucket shapes — the acrylic
          rides the zoom continuously and costs one backdrop pass instead of twelve. */
@@ -173,11 +175,29 @@
   // Proportional corners: the ticketing zone's radius FRACTION, measured off the mini buckets and
   // published as CSS vars — the same base × the expander's k = the same shape at every level.
   const radiusFor = (w, h) => clampN(RADIUS_F * Math.min(w, h), 2, 64);
+  // Size the 4×3 grid so each bucket's aspect EQUALS the expanded view's (W : H−48): the morph
+  // between a slot and the full view is then a uniform scale — no horizontal stretch, ever.
+  // The grid contain-fits at that aspect and centres in the region below the control strip.
+  const layoutGrid = (grid) => {
+    const W = window.innerWidth, TOP = 48, M = 14, GAP = 14;
+    const A = W / (window.innerHeight - TOP);                  // the expanded bucket's aspect
+    const rw = W - M * 2, rh = window.innerHeight - TOP - M * 2;
+    let cw = (rw - 3 * GAP) / 4, ch = cw / A;                  // width-limited fit…
+    if (3 * ch + 2 * GAP > rh) { ch = (rh - 2 * GAP) / 3; cw = ch * A; }   // …else height-limited
+    const gw = 4 * cw + 3 * GAP, gh = 3 * ch + 2 * GAP;
+    Object.assign(grid.style, {
+      left: `${((W - gw) / 2).toFixed(2)}px`,
+      top: `${(TOP + M + (rh - gh) / 2).toFixed(2)}px`,
+      width: `${gw.toFixed(2)}px`,
+      height: `${gh.toFixed(2)}px`,
+    });
+  };
   const layoutFrost = () => {
     const yearEl = layers[0]; if (!yearEl) return;
     const frost = yearEl.querySelector(":scope > .fc-frost");
     const grid = yearEl.querySelector(":scope > .fc-grid");
     if (!frost || !grid) return;
+    layoutGrid(grid);
     const m0 = grid.firstElementChild, c0 = grid.querySelector(".fc-day");
     const monR = radiusFor(m0.offsetWidth, m0.offsetHeight);
     surface.style.setProperty("--mon-r", `${monR.toFixed(1)}px`);
