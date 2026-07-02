@@ -87,6 +87,12 @@
       .fc-empty { width: 100%; margin: auto 0; padding: 14px 8px; text-align: center;
         color: rgba(255,255,255,0.38); font-size: 0.8rem; line-height: 1.4; }
 
+      /* LOD is per LEVEL: the year grid renders its months as QUIET structural buckets — the day
+         grid is texture, so its numbers and weekday labels (unreadable at this size = pure noise)
+         belong to the month level, where they're legible. Bands keep their space: the expander is
+         still the mini's geometric twin. */
+      .fc-level .fc-day-num { display: none; }
+      .fc-level .fc-dowrow span { visibility: hidden; }
       /* Level semantics: at the YEAR the month is the object (days are texture); inside a month
          the day buckets are the objects — wearing the pipeline's is-target glow on hover. */
       .fc-surface[data-level="0"] .fc-day { pointer-events: none; }
@@ -197,6 +203,15 @@
     for (let n = el; n && n !== stopAt; n = n.offsetParent) { x += n.offsetLeft; y += n.offsetTop; }
     return { x, y };
   };
+  // Sub-pixel layout rect of an element within its layer (offsetLeft is integer-rounded; grid fr
+  // positions are fractional and the dive multiplies any error by ~4× — measure via live rects
+  // divided by the layer's current scale instead).
+  const layoutRect = (el, layer) => {
+    const lr = layer.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    const sx = lr.width / layer.offsetWidth, sy = lr.height / layer.offsetHeight;
+    return { x: (er.left - lr.left) / sx, y: (er.top - lr.top) / sy, w: er.width / sx, h: er.height / sy };
+  };
   const targetAt = (cx, cy) => {
     const sel = level === 0 ? ".fc-month" : ".fc-day";
     let hit = null, best = null, bd = Infinity;
@@ -210,59 +225,105 @@
     return hit || best;
   };
 
-  // ── Expand: the bucket under the gesture becomes the window ─────────────────────────────
-  const expand = (targetEl) => {
-    transitioning = true;
-    const r = targetEl.getBoundingClientRect();   // live rect (leaned)
-    const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;   // edge-to-edge below the control strip
+  // ── Expander lifecycle ───────────────────────────────────────────────────────────────────
+  const buildExpander = (targetEl) => {
     const isMonth = level === 0;
     const exp = document.createElement("div");
     exp.className = "fc-bucket fc-expander";
     exp.dataset.kind = isMonth ? "month" : "day";
     if (isMonth) { exp.dataset.month = targetEl.dataset.month; exp.innerHTML = monthInnerHTML(+targetEl.dataset.month - 1, true); }
     else { exp.dataset.date = targetEl.dataset.date; exp.innerHTML = dayInnerHTML(targetEl.dataset.date); }
-    srcSel[level] = isMonth ? `.fc-month[data-month="${targetEl.dataset.month}"]` : `.fc-day[data-date="${targetEl.dataset.date}"]`;
-    // FINAL layout from frame one; a composited transform maps it onto its slot…
-    Object.assign(exp.style, { top: `${TOP}px`, width: `${W}px`, height: `${EH}px`, opacity: "0",
-      transform: `translate(${r.left}px, ${r.top - TOP}px) scale(${r.width / W}, ${r.height / EH})` });
+    const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;
+    Object.assign(exp.style, { top: `${TOP}px`, width: `${W}px`, height: `${EH}px` });
+    return exp;
+  };
+  const keyOf = (el) => (el.dataset.month ? "m" + el.dataset.month : "d" + el.dataset.date);
+  // Hover = intent: pre-build (and pre-raster, at 0.001 opacity) the expander for the bucket
+  // under the cursor, so the morph starts WARM — no DOM-insert/first-raster hitch at the exact
+  // moment the eye is watching.
+  let warm = null;
+  const prefetch = (targetEl) => {
+    const key = keyOf(targetEl);
+    if (warm && warm.key === key) return;
+    if (warm) { warm.el.remove(); warm = null; }
+    const exp = buildExpander(targetEl);
+    Object.assign(exp.style, { opacity: "0.001", pointerEvents: "none", zIndex: "1" });
     surface.appendChild(exp);
-    void exp.offsetWidth;
-    // …then glides to identity (GPU-only motion) while the outer level settles to rest beneath it
-    exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.35)}ms ease`;
-    exp.style.transform = "none";
-    exp.style.opacity = "1";
+    warm = { key, el: exp };
+  };
+  const dropWarm = () => { if (warm) { warm.el.remove(); warm = null; } };
+
+  // ── Expand: ONE camera move — the outer world dives INTO the bucket on the very same
+  //    trajectory the expander rides out of it (the iOS app-open grammar). ──────────────────
+  const expand = (targetEl) => {
+    transitioning = true;
+    const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;
+    const r = targetEl.getBoundingClientRect();   // live (leaned) rect — the expander's start
+    const key = keyOf(targetEl);
+    let exp;
+    if (warm && warm.key === key) { exp = warm.el; warm = null; }
+    else { dropWarm(); exp = buildExpander(targetEl); surface.appendChild(exp); }
+    srcSel[level] = level === 0 ? `.fc-month[data-month="${targetEl.dataset.month}"]` : `.fc-day[data-date="${targetEl.dataset.date}"]`;
+    Object.assign(exp.style, { zIndex: "5", pointerEvents: "auto", transition: "none", opacity: "0",
+      transform: `translate(${r.left}px, ${r.top - TOP}px) scale(${r.width / W}, ${r.height / EH})` });
+    // The dive: map the bucket's LAYOUT rect onto the expander's final rect — the outer layer
+    // travels there (non-uniform, per axis) so the slot stays pinned under the expander.
     const below = layers[level];
+    const b = layoutRect(targetEl, below);        // sub-pixel slot rect within the layer
+    const KX = W / b.w, KY = EH / b.h;
+    const dive = `translate(${(-b.x * KX).toFixed(2)}px, ${(TOP - below.offsetTop - b.y * KY).toFixed(2)}px) scale(${KX.toFixed(4)}, ${KY.toFixed(4)})`;
+    void exp.offsetWidth;
+    requestAnimationFrame(() => {                 // one frame for the (warm) raster to commit
+      exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.35)}ms ease`;
+      exp.style.transform = "none";
+      exp.style.opacity = "1";
+      below.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${MORPH_MS}ms ease`;
+      below.style.transform = dive;
+      below.style.opacity = "0";
+    });
     gz = 1; gsx = 0; gsy = 0;
-    below.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
-    below.style.transform = "translate(0px, 0px) scale(1)";
     setTimeout(() => {
       exp.style.transition = "none";
       below.style.transition = "none";
-      below.style.visibility = "hidden";          // parked at identity — the exact contract target
+      below.style.visibility = "hidden";
+      below.style.transform = "none"; below.style.opacity = "1";   // parked at identity for the return
       level += 1;
       layers[level] = exp;
       surface.dataset.level = String(level);
-      gz = 1; gsx = 0; gsy = 0;
       surface.style.setProperty("--fc-blur", "28px");
       transitioning = false;
-    }, MORPH_MS + 30);
+    }, MORPH_MS + 60);
   };
 
   // ── Contract: back into the slot, crossfading onto its pixel-identical twin ─────────────
+  // ── Contract: the reverse camera move — the outer world rides back OUT of the bucket while
+  //    the expander shrinks home, crossfading onto its pixel-identical twin at the landing. ──
   const contract = () => {
     transitioning = true;
     const exp = layers[level];
     const below = layers[level - 1];
-    below.style.visibility = "";                  // parked at identity → the slot rect is exact
-    const src = below.querySelector(srcSel[level - 1]);
-    const r = src ? src.getBoundingClientRect() : { left: window.innerWidth / 2, top: window.innerHeight / 2, width: 10, height: 10 };
     const W = exp.offsetWidth, EH = exp.offsetHeight, TOP = exp.offsetTop;
+    const src = below.querySelector(srcSel[level - 1]);
+    // slot geometry from LAYOUT, sub-pixel (below is parked at identity — rects are layout-true)
+    const b = layoutRect(src, below);
+    const rx = below.offsetLeft + b.x, ry = below.offsetTop + b.y;
+    const KX = W / b.w, KY = EH / b.h;
+    const dive = `translate(${(-b.x * KX).toFixed(2)}px, ${(TOP - below.offsetTop - b.y * KY).toFixed(2)}px) scale(${KX.toFixed(4)}, ${KY.toFixed(4)})`;
+    below.style.transition = "none";
+    below.style.transform = dive;                 // start deep inside the bucket…
+    below.style.opacity = "0";
+    below.style.visibility = "";
+    exp.style.transition = "none";
     exp.style.transform = "none";                 // shed any lean before travelling home
-    void exp.offsetWidth;
-    // travel home on the compositor; crossfade onto the pixel-identical twin over the last stretch
-    exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.45)}ms ease ${Math.round(MORPH_MS * 0.55)}ms`;
-    exp.style.transform = `translate(${r.left}px, ${r.top - TOP}px) scale(${r.width / W}, ${r.height / EH})`;
-    exp.style.opacity = "0";
+    void below.offsetWidth;
+    requestAnimationFrame(() => {
+      below.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${MORPH_MS}ms ease`;
+      below.style.transform = "none";             // …and ride back out to rest
+      below.style.opacity = "1";
+      exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.45)}ms ease ${Math.round(MORPH_MS * 0.55)}ms`;
+      exp.style.transform = `translate(${rx.toFixed(2)}px, ${(ry - TOP).toFixed(2)}px) scale(${(b.w / W).toFixed(4)}, ${(b.h / EH).toFixed(4)})`;
+      exp.style.opacity = "0";
+    });
     setTimeout(() => {
       exp.remove();
       layers[level] = null;
@@ -271,8 +332,9 @@
       gz = 1; gsx = 0; gsy = 0;
       surface.style.setProperty("--fc-blur", "28px");
       anchorC = null;
+      dropWarm();
       transitioning = false;
-    }, MORPH_MS + 30);
+    }, MORPH_MS + 60);
   };
 
   // ── Wheel: lean toward the cursor; the ceiling expands, the floor contracts ─────────────
@@ -315,8 +377,18 @@
     surface.appendChild(layers[0]);
     document.body.appendChild(surface);
     surface.addEventListener("wheel", onWheel, { passive: false });
+    // Buckets that glow are buttons: click opens; Escape backs out. Hover pre-warms the expander.
+    const clickTarget = (e) => {
+      if (transitioning || level >= 2) return null;
+      const t = level === 0 ? e.target.closest?.(".fc-month") : e.target.closest?.(".fc-day");
+      return t && layers[level].contains(t) ? t : null;
+    };
+    surface.addEventListener("click", (e) => { const t = clickTarget(e); if (t) expand(t); });
+    surface.addEventListener("mouseover", (e) => { const t = clickTarget(e); if (t) prefetch(t); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && level > 0 && !transitioning) contract(); });
     window.addEventListener("resize", () => {
       gz = 1; gsx = 0; gsy = 0; apply(false);
+      dropWarm();
       for (let i = 1; i <= level; i++) if (layers[i]) Object.assign(layers[i].style, { left: "0px", top: "48px", width: `${window.innerWidth}px`, height: `${window.innerHeight - 48}px` });
       layoutFrost();
     });
