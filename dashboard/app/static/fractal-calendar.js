@@ -103,9 +103,8 @@
          one layout, one backdrop pass), travelling between its slot and the window on a composited
          transform — so the motion runs on the GPU and it lands at scale 1 as a byte-standard
          bucket, pixel-identical to its twin in the grid. */
-      .fc-expander { position: absolute; z-index: 5; left: 0; top: 0; pointer-events: auto;
+      .fc-expander { position: absolute; z-index: 5; left: 0; pointer-events: auto;
         transform-origin: 0 0; will-change: transform;
-        padding: 52px 20px 20px;   /* interior clearance for the floating window controls */
         -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); }
     `;
     document.head.appendChild(style);
@@ -215,7 +214,7 @@
   const expand = (targetEl) => {
     transitioning = true;
     const r = targetEl.getBoundingClientRect();   // live rect (leaned)
-    const W = window.innerWidth, H = window.innerHeight;
+    const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;   // edge-to-edge below the control strip
     const isMonth = level === 0;
     const exp = document.createElement("div");
     exp.className = "fc-bucket fc-expander";
@@ -224,8 +223,8 @@
     else { exp.dataset.date = targetEl.dataset.date; exp.innerHTML = dayInnerHTML(targetEl.dataset.date); }
     srcSel[level] = isMonth ? `.fc-month[data-month="${targetEl.dataset.month}"]` : `.fc-day[data-date="${targetEl.dataset.date}"]`;
     // FINAL layout from frame one; a composited transform maps it onto its slot…
-    Object.assign(exp.style, { width: `${W}px`, height: `${H}px`, opacity: "0",
-      transform: `translate(${r.left}px, ${r.top}px) scale(${r.width / W}, ${r.height / H})` });
+    Object.assign(exp.style, { top: `${TOP}px`, width: `${W}px`, height: `${EH}px`, opacity: "0",
+      transform: `translate(${r.left}px, ${r.top - TOP}px) scale(${r.width / W}, ${r.height / EH})` });
     surface.appendChild(exp);
     void exp.offsetWidth;
     // …then glides to identity (GPU-only motion) while the outer level settles to rest beneath it
@@ -257,12 +256,12 @@
     below.style.visibility = "";                  // parked at identity → the slot rect is exact
     const src = below.querySelector(srcSel[level - 1]);
     const r = src ? src.getBoundingClientRect() : { left: window.innerWidth / 2, top: window.innerHeight / 2, width: 10, height: 10 };
-    const W = window.innerWidth, H = window.innerHeight;
+    const W = exp.offsetWidth, EH = exp.offsetHeight, TOP = exp.offsetTop;
     exp.style.transform = "none";                 // shed any lean before travelling home
     void exp.offsetWidth;
     // travel home on the compositor; crossfade onto the pixel-identical twin over the last stretch
     exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.45)}ms ease ${Math.round(MORPH_MS * 0.55)}ms`;
-    exp.style.transform = `translate(${r.left}px, ${r.top}px) scale(${r.width / W}, ${r.height / H})`;
+    exp.style.transform = `translate(${r.left}px, ${r.top - TOP}px) scale(${r.width / W}, ${r.height / EH})`;
     exp.style.opacity = "0";
     setTimeout(() => {
       exp.remove();
@@ -318,7 +317,7 @@
     surface.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("resize", () => {
       gz = 1; gsx = 0; gsy = 0; apply(false);
-      for (let i = 1; i <= level; i++) if (layers[i]) Object.assign(layers[i].style, { left: "0px", top: "0px", width: `${window.innerWidth}px`, height: `${window.innerHeight}px` });
+      for (let i = 1; i <= level; i++) if (layers[i]) Object.assign(layers[i].style, { left: "0px", top: "48px", width: `${window.innerWidth}px`, height: `${window.innerHeight - 48}px` });
       layoutFrost();
     });
     apply(false);
