@@ -13,11 +13,19 @@
 (() => {
   const YEAR = 2026;                          // one year for now
   const EASE = "cubic-bezier(.22, 1, .26, 1)";
-  const MORPH_MS = 460;                       // expand/contract duration
+  const MORPH_MS = 340;                       // the handoff reads as ONE MORE TICK (same curve, near-tick duration)
   const TICK_K = 0.42;                        // each wheel tick covers this fraction of what REMAINS to the locked framing
   const HANDOFF_RATIO = 1.22;                 // remaining zoom ≤ this → swap in the real container (negligible travel)
-  const EXP_M = 16;                           // the expanded bucket sits with EQUAL margins to every window edge
-  const expRect = () => ({ x: EXP_M, y: EXP_M, w: window.innerWidth - 2 * EXP_M, h: window.innerHeight - 2 * EXP_M });
+  const EXP_M = 16;                           // equal spacing to the window edges…
+  let expTop = 58;                            // …and the SAME spacing beneath the circular buttons (measured at boot/resize)
+  const measureTop = () => {
+    let b = 42;
+    document.querySelectorAll(".window-control-cluster").forEach((el) => { b = Math.max(b, el.getBoundingClientRect().bottom); });
+    expTop = Math.round(b + EXP_M);
+  };
+  // The DEFINED viewport: where a settled (locked) bucket lives. Zoom may overflow it mid-gesture;
+  // every landing settles exactly inside it.
+  const expRect = () => ({ x: EXP_M, y: expTop, w: window.innerWidth - 2 * EXP_M, h: window.innerHeight - expTop - EXP_M });
   const RADIUS_F = 16 / 245;                  // the ticketing zone's corner PROPORTION (16px on its ~245px side):
                                               // perceived roundness is relative to size, so the radius scales
                                               // with each bucket — same shape at every level, no capsule minis
@@ -71,7 +79,7 @@
       .fc-bucket { position: relative; box-sizing: border-box; display: flex; flex-direction: column; min-height: 0;
         overflow: hidden; color: #fff; border: 0;
         border-radius: calc(var(--mon-r, 16px) * var(--kx, 1)) / calc(var(--mon-r, 16px) * var(--ky, 1));
-        padding: calc(12px * var(--ky, 1)) calc(14px * var(--kx, 1)) calc(14px * var(--ky, 1));
+        padding: calc(8px * var(--ky, 1)) calc(10px * var(--kx, 1)) calc(10px * var(--ky, 1));
         background: linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
         box-shadow: inset 0 0 0 var(--ring, 1px) rgba(255,255,255,0.14),
           inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 42px rgba(0,0,0,0.28);
@@ -81,25 +89,24 @@
       .fc-level .fc-day, .fc-expander[data-kind="month"] .fc-day {
         --ringd: calc(1px + (var(--ring-t, 1px) - 1px) * var(--lp, 0)); }
       .fc-level .fc-hd { font-size: calc(0.98rem + (var(--hd-t, 0.98rem) - 0.98rem) * var(--lp, 0)); }
-      .fc-level .fc-pill { opacity: var(--lp, 0); }
       .fc-level .fc-day-num { font-size: var(--num-t, 0.85rem); opacity: var(--lp, 0); }
       .fc-level .fc-dowrow span { font-size: var(--dow-t, 0.72rem); opacity: var(--lp, 0); }
       .fc-expander[data-kind="month"] .fc-day-num {
         font-size: calc(0.85rem + (var(--num-t, 0.85rem) - 0.85rem) * var(--lp, 0)); }
       /* The zone header: a fixed FRACTION band (text floats inside it — text is per-level LOD). */
-      .fc-hd { flex: 0 0 10%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      .fc-hd { flex: 0 0 9%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
         padding: 0 1%; font-size: 0.98rem; font-weight: 700; line-height: 1.25; letter-spacing: .01em;
         color: rgba(255,255,255,0.85); white-space: nowrap; min-height: 0; }
       .fc-expander .fc-hd { font-size: 1.3rem; }
       /* The zone count-pill recipe carries the year / weekday sub-labels. */
       .fc-pill { flex: 0 0 auto; font-size: 0.72rem; font-weight: 600; color: rgba(255,255,255,0.62);
         background: rgba(255,255,255,0.10); border-radius: 999px; padding: 1px 8px; }
-      .fc-dowrow { flex: 0 0 6%; display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 2%;
+      .fc-dowrow { flex: 0 0 5%; display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 1.6%;
         align-items: center; min-height: 0; }
       .fc-dowrow span { text-align: center; font-size: 0.72rem; font-weight: 700; color: rgba(255,255,255,0.4);
         white-space: nowrap; overflow: hidden; }
       .fc-days { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr);
-        grid-template-rows: repeat(6, 1fr); column-gap: 2%; row-gap: 2.6%; }
+        grid-template-rows: repeat(6, 1fr); column-gap: 1.6%; row-gap: 2%; }
       /* A day bucket: the same family — its trim scales by the SAME k, so cells coincide too. */
       .fc-day { position: relative; min-height: 0; overflow: hidden; border: 0;
         border-radius: calc(var(--day-r, 3px) * var(--kx, 1)) / calc(var(--day-r, 3px) * var(--ky, 1));
@@ -149,13 +156,13 @@
       `><span class="fc-day-num">${d}</span><div class="fc-day-body"></div></div>`;
   };
   const monthInnerHTML = (m, expanded) =>
-    `<div class="fc-hd"><span>${MONTHS[m]}</span><span class="fc-pill">${YEAR}</span></div>` +
+    `<div class="fc-hd"><span>${MONTHS[m]}</span></div>` +
     `<div class="fc-dowrow">${DOW.map((d) => `<span>${d}</span>`).join("")}</div>` +
     `<div class="fc-days">${Array.from({ length: daysIn(m) }, (_, i) => dayCellHTML(m, i + 1)).join("")}</div>`;
   const dayInnerHTML = (date) => {
     const [, mo, da] = date.split("-").map(Number);
     const d = new Date(YEAR, mo - 1, da);
-    return `<div class="fc-hd"><span>${MONTHS[mo - 1]} ${da}</span><span class="fc-pill">${DOW_FULL[d.getDay()]}, ${YEAR}</span></div>` +
+    return `<div class="fc-hd"><span>${MONTHS[mo - 1]} ${da}</span><span class="fc-pill">${DOW_FULL[d.getDay()]}</span></div>` +
       `<div class="fc-empty" data-date="${date}">Drag cards here</div>`;
   };
 
@@ -187,16 +194,15 @@
   // between a slot and the full view is then a uniform scale — no horizontal stretch, ever.
   // The grid contain-fits at that aspect and centres in the region below the control strip.
   const layoutGrid = (grid) => {
-    const W = window.innerWidth, TOP = 48, M = 14, GAP = 14;
-    const E = expRect();
-    const A = E.w / E.h;                                       // the expanded bucket's aspect (equal margins)
-    const rw = W - M * 2, rh = window.innerHeight - TOP - M * 2;
-    let cw = (rw - 3 * GAP) / 4, ch = cw / A;                  // width-limited fit…
-    if (3 * ch + 2 * GAP > rh) { ch = (rh - 2 * GAP) / 3; cw = ch * A; }   // …else height-limited
+    const GAP = 14;
+    const E = expRect();                                       // the year grid lives INSIDE the defined viewport
+    const A = E.w / E.h;                                       // bucket aspect == expanded aspect (uniform morphs)
+    let cw = (E.w - 3 * GAP) / 4, ch = cw / A;                 // width-limited fit…
+    if (3 * ch + 2 * GAP > E.h) { ch = (E.h - 2 * GAP) / 3; cw = ch * A; }   // …else height-limited
     const gw = 4 * cw + 3 * GAP, gh = 3 * ch + 2 * GAP;
     Object.assign(grid.style, {
-      left: `${((W - gw) / 2).toFixed(2)}px`,
-      top: `${(TOP + M + (rh - gh) / 2).toFixed(2)}px`,
+      left: `${(E.x + (E.w - gw) / 2).toFixed(2)}px`,
+      top: `${(E.y + (E.h - gh) / 2).toFixed(2)}px`,
       width: `${gw.toFixed(2)}px`,
       height: `${gh.toFixed(2)}px`,
     });
@@ -227,7 +233,7 @@
   // ── The lean: one composited transform, cursor-anchored, gently centre-drifting ─────────
   const apply = (animate) => {
     const el = layers[level]; if (!el) return;
-    el.style.transition = animate ? `transform 300ms cubic-bezier(.25, .46, .45, .94)` : "none";
+    el.style.transition = animate ? `transform 300ms ${EASE}` : "none";
     el.style.transform = `translate(${-gsx}px, ${-gsy}px) scale(${gz})`;
     // Lockstep progress: 0 at rest -> 1 at the boundary. Text sizes, ring weights and detail
     // opacity all lerp on this, so every lock stop is that increment closer to the transition.
@@ -360,7 +366,7 @@
     const dive = `translate(${(E.x - below.offsetLeft - b.x * KX).toFixed(2)}px, ${(E.y - below.offsetTop - b.y * KY).toFixed(2)}px) scale(${KX.toFixed(4)}, ${KY.toFixed(4)})`;
     void exp.offsetWidth;
     requestAnimationFrame(() => {                 // one frame for the (warm) raster to commit
-      exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.35)}ms ease`;
+      exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity 120ms ease`;
       exp.style.transform = "none";
       exp.style.opacity = "1";
       below.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${MORPH_MS}ms ease`;
@@ -378,6 +384,7 @@
       surface.dataset.level = String(level);
       surface.style.setProperty("--fc-blur", "28px");
       transitioning = false;
+      sharpen();
     }, MORPH_MS + 60);
   };
 
@@ -472,6 +479,7 @@
     layers[0] = buildYear();
     surface.appendChild(layers[0]);
     document.body.appendChild(surface);
+    measureTop();
     surface.addEventListener("wheel", onWheel, { passive: false });
     // Buckets that glow are buttons: click opens; Escape backs out. Hover pre-warms the expander.
     const clickTarget = (e) => {
@@ -483,6 +491,7 @@
     surface.addEventListener("mouseover", (e) => { const t = clickTarget(e); if (t) prefetch(t); });
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && level > 0 && !transitioning) contract(true); });
     window.addEventListener("resize", () => {
+      measureTop();
       gz = 1; gsx = 0; gsy = 0; apply(false);
       dropWarm();
       const E = expRect();
