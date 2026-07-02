@@ -59,6 +59,11 @@
          buckets are identical across all twelve months. Text sizes differ per LOD (.fc-full);
          geometry never does. */
       .fc-month { position: relative; }   /* the stage is a .fc-layer (absolute, inset 0) — don't override it */
+      /* ONE frost pass for the whole year layer: a single backdrop-blur element clipped to the 12
+         bucket shapes (12 separate backdrop passes per frame was the fps ceiling). It lives inside
+         the transformed layer, so the acrylic rides the zoom continuously — never switched off. */
+      .fc-frost { position: absolute; inset: 0; z-index: 0; pointer-events: none;
+        -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); }
       /* EVERY px-based dimension is calc(base × --kx/--ky): the mini has k=1; a focused stage gets
          the exact mini→stage scale factors per axis, so borders, radii and shadows land at the SAME
          screen pixels as the mini's when the morph starts — geometry parity is by construction. */
@@ -69,11 +74,12 @@
         padding: calc(7px * var(--ky, 1)) calc(9px * var(--kx, 1)) calc(9px * var(--ky, 1));
         border-radius: calc(16px * var(--kx, 1)) / calc(16px * var(--ky, 1));
         background: linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
-        -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%);
         border: solid rgba(255,255,255,0.14);
         border-width: calc(1px * var(--ky, 1)) calc(1px * var(--kx, 1));
         box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.18),
           0 calc(18px * var(--ky, 1)) calc(42px * var(--ky, 1)) rgba(0,0,0,0.28); }
+      /* A focused stage IS a single bucket → its own single backdrop pass. */
+      .fc-stage { -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); }
       .fc-mg-hd { flex: 0 0 9%; display: flex; align-items: center; gap: 2.5%;
         font-size: 0.62rem; font-weight: 800; letter-spacing: .01em; color: rgba(255,255,255,0.9);
         opacity: 0; transition: opacity .3s ease; }
@@ -151,12 +157,14 @@
          (re-blurring 12 panels per frame is what killed the fps); at rest the glass returns and a
          two-frame demote/repromote (in idle time) re-rasterises the layer tack-sharp. */
       .fc-layer { will-change: transform; }
-      .fc-moving .fc-month, .fc-moving .fc-stage {
-        -webkit-backdrop-filter: none; backdrop-filter: none;
-        background: linear-gradient(180deg, rgba(38,44,58,0.92), rgba(22,27,38,0.9)); }
-      .fc-moving .fc-dayview {   /* keep the cell's white wash over the opaque swap */
-        background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035)),
-          linear-gradient(180deg, rgba(38,44,58,0.92), rgba(22,27,38,0.9)); }
+      /* The acrylic NEVER switches off — no flashes. The frost scales with the bucket like every
+         other dimension (--fc-blur is k-scaled per stage), so a bucket looks like the SAME bucket
+         at every zoom level: same glass, same corners, same borders, same proportions. */
+      /* During a morph only the TEXT/detail crossfades — the containers are pixel-identical, so
+         the swap itself is invisible. */
+      .fc-textfade .fc-mg-hd, .fc-textfade .fc-mg-dow, .fc-textfade .fc-day-num, .fc-textfade .fc-day-dow,
+      .fc-textfade .fc-dv-num, .fc-textfade .fc-dv-sub, .fc-textfade .fc-dayview-body { opacity: 0 !important; }
+      .fc-day-dow, .fc-dv-num, .fc-dv-sub, .fc-dayview-body { transition: opacity .3s ease; }
     `;
     document.head.appendChild(style);
   };
@@ -180,6 +188,9 @@
   const buildYear = () => {
     const el = document.createElement("div");
     el.className = "fc-layer fc-year";
+    const frost = document.createElement("div");
+    frost.className = "fc-frost";
+    el.appendChild(frost);   // first child → the buckets paint over their shared frost
     for (let m = 0; m < 12; m++) {
       const month = document.createElement("div");
       month.className = "fc-month";
@@ -188,6 +199,21 @@
       el.appendChild(month);
     }
     return el;
+  };
+
+  // Clip the year layer's single frost pass to the 12 bucket shapes (rounded rects in layer-layout
+  // coordinates — the clip rides the zoom transform with the layer).
+  const layoutFrost = () => {
+    const yearEl = layers[0]; if (!yearEl) return;
+    const frost = yearEl.querySelector(":scope > .fc-frost"); if (!frost) return;
+    const parts = [...yearEl.querySelectorAll(":scope > .fc-month")].map((m) => {
+      const x = m.offsetLeft, y = m.offsetTop, w = m.offsetWidth, h = m.offsetHeight;
+      const r = Math.min(16, w / 2, h / 2);
+      return `M ${x + r} ${y} L ${x + w - r} ${y} A ${r} ${r} 0 0 1 ${x + w} ${y + r} ` +
+        `L ${x + w} ${y + h - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} L ${x + r} ${y + h} ` +
+        `A ${r} ${r} 0 0 1 ${x} ${y + h - r} L ${x} ${y + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`;
+    });
+    frost.style.clipPath = `path('${parts.join(" ")}')`;
   };
 
   // A month LOADED as its own container: the same blueprint at real full size (.fc-full only
@@ -225,6 +251,10 @@
     const el = layers[level]; if (!el) return;
     el.style.transition = animate ? `transform 300ms cubic-bezier(.25, .46, .45, .94)` : "none";
     el.style.transform = `translate(${-gsx}px, ${-gsy}px) scale(${gz})`;
+    // Constant EFFECTIVE frost: the local radius counter-scales the zoom so every bucket wears the
+    // same 28px acrylic at every level — never switched off (no flashing), and the blur cost stays
+    // bounded instead of exploding with z.
+    viewport.style.setProperty("--fc-blur", `${(28 / gz).toFixed(1)}px`);
     if (level === 0) {
       const lod = gz < 1.6 ? "year" : "near";
       if (viewport.dataset.lod !== lod) viewport.dataset.lod = lod;
@@ -235,10 +265,9 @@
     settleTimer = setTimeout(() => {
       if (transitioning) return;
       const el = layers[level]; if (el) el.style.transition = "none";
-      viewport.style.setProperty("--fc-blur", `${(28 / Math.max(1, gz)).toFixed(2)}px`);
-      setMoving(false);   // the glass returns at rest…
-      // …and a two-frame demote/re-promote (idle time — the gesture is over) forces a raster at
-      // the final scale, so text is tack-sharp without a promotion hitch on the NEXT gesture.
+      setMoving(false);
+      // A two-frame demote/re-promote (idle time — the gesture is over) forces a raster at the
+      // final scale, so text is tack-sharp without a promotion hitch on the NEXT gesture.
       requestAnimationFrame(() => requestAnimationFrame(() => {
         if (viewport.classList.contains("fc-moving") || transitioning) return;
         const l = layers[level]; if (!l) return;
@@ -293,8 +322,9 @@
     // month's k (its 1px border is k layout px), so the day view must grow from THAT base.
     const pk = layers[level].style;
     const pkx = parseFloat(pk.getPropertyValue("--kx")) || 1, pky = parseFloat(pk.getPropertyValue("--ky")) || 1;
-    stage.style.setProperty("--kx", (pkx * (vr.width / lw)).toFixed(4));
-    stage.style.setProperty("--ky", (pky * (vr.height / lh)).toFixed(4));
+    const kx = pkx * (vr.width / lw), ky = pky * (vr.height / lh);
+    stage.style.setProperty("--kx", kx.toFixed(4));
+    stage.style.setProperty("--ky", ky.toFixed(4));
   };
 
   // ── The seamless boundary: FLIP the focused container in/out ───────────────
@@ -305,31 +335,37 @@
     const r = targetEl.getBoundingClientRect();
     const stage = level === 0 ? buildMonthView(+targetEl.dataset.month - 1) : buildDayView(targetEl.dataset.date);
     setParityVars(stage, targetEl);
-    // The incoming container starts EXACTLY over the bucket it comes from…
+    // The incoming container starts EXACTLY over the bucket it grows from — pixel-identical
+    // (geometry, borders, corners, fill AND frost are all k-scaled), so it enters at FULL opacity:
+    // there is nothing to crossfade except the text, which eases in on its own.
     const srcTransform = `translate(${r.left - vr.left}px, ${r.top - vr.top}px) scale(${r.width / vr.width}, ${r.height / vr.height})`;
     stage.style.transformOrigin = "0 0";
     stage.style.transform = srcTransform;
-    stage.style.opacity = "0.15";
+    // Frost continuity: at frame 0 the stage's EFFECTIVE blur equals the bucket's constant 28px
+    // (local radius ÷ its initial scale); the inline override is dropped once it fills the view.
+    stage.style.setProperty("--fc-blur", `${(28 / (r.width / vr.width)).toFixed(1)}px`);
+    stage.classList.add("fc-textfade");
     viewport.appendChild(stage);
     void stage.offsetWidth;
-    // …and morphs to fill the viewport, while the outer layer keeps travelling INTO the bucket
-    // (scaled about the bucket's centre) and fades — one continuous camera move.
+    // The outer layer rides the SAME per-axis trajectory (bucket rect → viewport, non-uniform),
+    // so the bucket stays pinned beneath its full-size self the whole way — one camera move, the
+    // neighbours flying off screen around it, no fades, no flash.
     const below = layers[level];
     saved[level] = { z: gz, sx: gsx, sy: gsy, srcTransform };
-    const k2 = Math.min(vr.width / r.width, vr.height / r.height);
-    const cx = r.left - vr.left + r.width / 2, cy = r.top - vr.top + r.height / 2;
-    below.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${MORPH_MS * 0.7}ms ease`;
-    below.style.transform = `translate(${(vr.width / 2 - cx * k2) - gsx * k2}px, ${(vr.height / 2 - cy * k2) - gsy * k2}px) scale(${gz * k2})`;
-    below.style.opacity = "0";
-    stage.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${MORPH_MS * 0.6}ms ease`;
+    const bx = (r.left - vr.left + gsx) / gz, by = (r.top - vr.top + gsy) / gz;   // bucket in layer-layout coords
+    const bw = r.width / gz, bh = r.height / gz;
+    const KX = vr.width / bw, KY = vr.height / bh;
+    below.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
+    below.style.transform = `translate(${-bx * KX}px, ${-by * KY}px) scale(${KX}, ${KY})`;
+    stage.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
     stage.style.transform = "translate(0px, 0px) scale(1, 1)";
-    stage.style.opacity = "1";
+    stage.classList.remove("fc-textfade");   // text eases in via its own .3s opacity transitions
     setTimeout(() => {
       below.style.display = "none"; below.style.transition = "";
       stage.style.transition = "";
+      stage.style.removeProperty("--fc-blur");   // back to the inherited constant-28px frost
       level += 1; layers[level] = stage;
       resetZoom(); apply(false);
-      viewport.style.setProperty("--fc-blur", "28px");
       setMoving(false);
       transitioning = false;
     }, MORPH_MS + 30);
@@ -342,21 +378,23 @@
     const stage = layers[level];
     const below = layers[level - 1];
     const back = saved[level - 1];
-    below.style.display = "";                 // returns still zoomed-into-the-bucket + invisible
+    below.style.display = "";                 // still parked deep inside the bucket — exactly beneath the stage
     void below.offsetWidth;
-    below.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${MORPH_MS * 0.8}ms ease`;
+    below.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
     below.style.transform = `translate(${-back.sx}px, ${-back.sy}px) scale(${back.z})`;
-    below.style.opacity = "1";
-    stage.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${MORPH_MS * 0.7}ms ease`;
-    stage.style.transform = back.srcTransform;   // shrinks back into the bucket it came from
-    stage.style.opacity = "0";
+    stage.classList.add("fc-textfade");       // only the text eases out — the container is its bucket's twin
+    // Frost continuity on the way out: the local radius that lands at EXACTLY 28px effective when
+    // the stage settles into the bucket (radius ÷ destination scale).
+    const dstScale = parseFloat(back.srcTransform.match(/scale\(([\d.]+)/)?.[1] || "1");
+    stage.style.setProperty("--fc-blur", `${(28 / dstScale).toFixed(1)}px`);
+    stage.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
+    stage.style.transform = back.srcTransform;   // shrinks back into the bucket it came from, in lockstep
     setTimeout(() => {
       stage.remove(); layers[level] = null;
       below.style.transition = "";
       level -= 1;
       gz = back.z; gsx = back.sx; gsy = back.sy;
       apply(false);
-      viewport.style.setProperty("--fc-blur", `${(28 / Math.max(1, gz)).toFixed(2)}px`);
       setMoving(false);
       transitioning = false;
     }, MORPH_MS + 30);
@@ -410,8 +448,9 @@
     viewport.appendChild(layers[0]);
     document.body.appendChild(viewport);
     viewport.addEventListener("wheel", onWheel, { passive: false });
-    window.addEventListener("resize", () => { clampS(); apply(); });
+    window.addEventListener("resize", () => { clampS(); apply(); layoutFrost(); });
     apply();
+    layoutFrost();
   };
   window.fractalCalendar = {
     year: YEAR,
