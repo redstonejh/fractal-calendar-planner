@@ -40,7 +40,6 @@
   let srcSel = [null, null];                  // how to find the slot each expander contracts back into
   let transitioning = false;
   let gz = 1, gsx = 0, gsy = 0;               // the current level's camera (target values; CSS transition glides)
-  let settleTimer = 0;
   let lockedT = null, lastCur = { x: -1, y: -1 }, lastWheelT = 0;   // the gesture's LOCKED target bucket
 
   const clampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -58,7 +57,7 @@
          window edges. The container passes pointer events through (the top strip keeps working);
          the grid and expanded buckets re-enable them. */
       .fc-surface { position: fixed; inset: 0; z-index: 800; pointer-events: none; -webkit-app-region: no-drag; overflow: hidden; }
-      .fc-level { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
+      .fc-level { position: absolute; inset: 0; transform-origin: 0 0; }
       /* The grid is sized in JS so every bucket has EXACTLY the expanded view's aspect ratio —
          the expand/contract morph is then a UNIFORM scale: nothing ever stretches. */
       .fc-grid { position: absolute; display: grid; pointer-events: auto;
@@ -83,16 +82,20 @@
         background: linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
         box-shadow: inset 0 0 0 var(--ring, 1px) rgba(255,255,255,0.14),
           inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 42px rgba(0,0,0,0.28);
-        transition: box-shadow .18s ease, background .18s ease; }
+        transition: box-shadow 300ms ${EASE}, background .18s ease; }
       /* Lockstep lerps: the year layer's months (and a month's days) step toward the boundary. */
       .fc-level .fc-month { --ring: calc(1px + (var(--ring-t, 1px) - 1px) * var(--lp, 0)); }
       .fc-level .fc-day, .fc-expander[data-kind="month"] .fc-day {
         --ringd: calc(1px + (var(--ring-t, 1px) - 1px) * var(--lp, 0)); }
-      .fc-level .fc-hd { font-size: calc(0.98rem + (var(--hd-t, 0.98rem) - 0.98rem) * var(--lp, 0)); }
-      .fc-level .fc-day-num { font-size: var(--num-t, 0.85rem); opacity: var(--lp, 0); }
-      .fc-level .fc-dowrow span { font-size: var(--dow-t, 0.72rem); opacity: var(--lp, 0); }
+      .fc-level .fc-hd { font-size: calc(0.98rem + (var(--hd-t, 0.98rem) - 0.98rem) * var(--lp, 0));
+        transition: font-size 300ms ${EASE}; }
+      .fc-level .fc-day-num { font-size: var(--num-t, 0.85rem); opacity: var(--lp, 0);
+        transition: opacity 300ms ease; }
+      .fc-level .fc-dowrow span { font-size: var(--dow-t, 0.72rem); opacity: var(--lp, 0);
+        transition: opacity 300ms ease; }
       .fc-expander[data-kind="month"] .fc-day-num {
-        font-size: calc(0.85rem + (var(--num-t, 0.85rem) - 0.85rem) * var(--lp, 0)); }
+        font-size: calc(0.85rem + (var(--num-t, 0.85rem) - 0.85rem) * var(--lp, 0));
+        transition: font-size 300ms ${EASE}; }
       /* The zone header: a fixed FRACTION band (text floats inside it — text is per-level LOD). */
       .fc-hd { flex: 0 0 9%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
         padding: 0 1%; font-size: 0.98rem; font-weight: 700; line-height: 1.25; letter-spacing: .01em;
@@ -113,7 +116,7 @@
         background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035));
         box-shadow: inset 0 0 0 var(--ringd, 1px) rgba(255,255,255,0.10),
           inset 0 1px 0 rgba(255,255,255,0.08);
-        transition: box-shadow .18s ease, background .18s ease; }
+        transition: box-shadow 300ms ${EASE}, background .18s ease; }
       .fc-day-num { position: absolute; top: 6%; left: 7%; font-size: 0.85rem; font-weight: 700;
         color: rgba(255,255,255,0.78); line-height: 1; }
       .fc-day-body { position: absolute; inset: 24% 5% 5%; }
@@ -142,7 +145,7 @@
          transform — so the motion runs on the GPU and it lands at scale 1 as a byte-standard
          bucket, pixel-identical to its twin in the grid. */
       .fc-expander { position: absolute; z-index: 5; pointer-events: auto;
-        transform-origin: 0 0; will-change: transform;
+        transform-origin: 0 0;
         -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); }
     `;
     document.head.appendChild(style);
@@ -252,52 +255,6 @@
       sx: below.offsetLeft + (b.x + b.w / 2) * S - (E.x + E.w / 2),
       sy: below.offsetTop + (b.y + b.h / 2) * S - (E.y + E.h / 2) };
   };
-  // BAKE at rest: a transform-scaled layer is a stretched BITMAP — at deep framings (z~4) the
-  // compositor clamps its raster and the screen goes to mush (worse at >100% display scaling).
-  // So every SETTLED state converts to layout `zoom`: real layout at the zoomed size — text is
-  // vector-rendered and tiled, tack-sharp at any depth and any DPR. Gestures unbake back to the
-  // composited transform. Both forms render at identical positions, so the swap is invisible.
-  let baked = false;
-  const layerBase = () => (level === 0
-    ? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight }
-    : expRect());
-  const bake = () => {
-    const el = layers[level]; if (!el || transitioning) return;
-    const b = layerBase();
-    if (gz <= 1.001) {
-      el.style.zoom = ""; el.style.transform = "none";
-      el.style.left = `${b.x}px`; el.style.top = `${b.y}px`;
-      el.style.width = `${b.w}px`; el.style.height = `${b.h}px`;
-      baked = false; return;
-    }
-    el.style.transform = "none";
-    el.style.zoom = String(gz);
-    el.style.left = `${((b.x - gsx) / gz).toFixed(3)}px`;   // zoom multiplies the element's own lengths
-    el.style.top = `${((b.y - gsy) / gz).toFixed(3)}px`;
-    el.style.width = `${b.w}px`;
-    el.style.height = `${b.h}px`;
-    baked = true;
-  };
-  const unbake = () => {
-    const el = layers[level]; if (!el || !baked) return;
-    const b = layerBase();
-    el.style.zoom = "";
-    el.style.left = `${b.x}px`; el.style.top = `${b.y}px`;
-    el.style.width = `${b.w}px`; el.style.height = `${b.h}px`;
-    el.style.transition = "none";
-    el.style.transform = `translate(${-gsx}px, ${-gsy}px) scale(${gz})`;
-    void el.offsetWidth;
-    baked = false;
-  };
-  const scheduleSettle = () => {
-    clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => {
-      if (transitioning) return;
-      const el = layers[level]; if (el) el.style.transition = "none";
-      bake();
-    }, 340);
-  };
-
   // Which bucket holds the gesture's locked anchor point (layer-layout coords).
   const layerOffset = (el, stopAt) => {
     let x = 0, y = 0;
@@ -379,7 +336,6 @@
   // ── Expand: ONE camera move — the outer world dives INTO the bucket on the very same
   //    trajectory the expander rides out of it (the iOS app-open grammar). ──────────────────
   const expand = (targetEl) => {
-    unbake();
     transitioning = true;
     const E = expRect();
     const r = targetEl.getBoundingClientRect();   // live (leaned) rect — the expander's start
@@ -416,7 +372,6 @@
       surface.dataset.level = String(level);
       surface.style.setProperty("--fc-blur", "28px");
       transitioning = false;
-      bake();
     }, MORPH_MS + 60);
   };
 
@@ -466,7 +421,6 @@
       lockedT = null;
       dropWarm();
       transitioning = false;
-      bake();                                     // deep framing at rest → layout zoom, vector-sharp
     }, MORPH_MS + 60);
   };
 
@@ -478,7 +432,6 @@
   const onWheel = (e) => {
     e.preventDefault();
     if (transitioning) return;
-    unbake();
     const px = e.clientX, py = e.clientY;
     const now = performance.now();
     const newGesture = now - lastWheelT > 450 || Math.hypot(px - lastCur.x, py - lastCur.y) > 30;
@@ -487,7 +440,7 @@
       if (gz <= 1.02 && level > 0) { contract(false); return; }
       gz += (1 - gz) * TICK_K; gsx -= gsx * TICK_K; gsy -= gsy * TICK_K;
       if (gz <= 1.15) { gz = 1; gsx = 0; gsy = 0; lockedT = null; }   // symmetric tick-count with the way in
-      apply(true); scheduleSettle(); return;
+      apply(true); return;
     }
     if (level >= 2) return;                                    // a day is the deepest bucket (for now)
     if (newGesture || !lockedT || !lockedT.isConnected) {      // ── lock the gesture's target
@@ -500,7 +453,6 @@
     gz += (F.s - gz) * TICK_K; gsx += (F.sx - gsx) * TICK_K; gsy += (F.sy - gsy) * TICK_K;
     if (F.s / gz <= HANDOFF_RATIO) { const t = lockedT; lockedT = null; expand(t); return; }
     apply(true);
-    scheduleSettle();
   };
 
   // ── Boot ────────────────────────────────────────────────────────────────────────────────
