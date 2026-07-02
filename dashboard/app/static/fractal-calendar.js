@@ -56,37 +56,48 @@
       .fc-frost { position: absolute; inset: 0; pointer-events: none;
         -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); }
 
-      /* ── THE bucket — the ticketing pipeline zone, verbatim. Fixed trim at every level. ── */
+      /* ── THE bucket — the ticketing zone at k=1, and the SAME OBJECT grown at every level: all
+         trim is calc(base × --kx/--ky) and every band/gap/inset is an axis-safe fraction, so a
+         mini scaled UP and the expanded view scaled DOWN have their interiors in IDENTICAL
+         relative positions — the day grids line up mechanically at the handoff. ── */
       .fc-bucket { position: relative; box-sizing: border-box; display: flex; flex-direction: column; min-height: 0;
-        overflow: hidden; border-radius: 16px; padding: 12px 14px 14px; color: #fff;
+        overflow: hidden; color: #fff;
+        border-radius: calc(var(--mon-r, 16px) * var(--kx, 1)) / calc(var(--mon-r, 16px) * var(--ky, 1));
+        padding: calc(12px * var(--ky, 1)) calc(14px * var(--kx, 1)) calc(14px * var(--ky, 1));
         background: linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
-        border: 1px solid rgba(255,255,255,0.14);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 42px rgba(0,0,0,0.28);
+        border: solid rgba(255,255,255,0.14);
+        border-width: calc(1px * var(--ky, 1)) calc(1px * var(--kx, 1));
+        box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.18),
+          0 calc(18px * var(--ky, 1)) calc(42px * var(--ky, 1)) rgba(0,0,0,0.28);
         transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
-      /* The zone header, verbatim. */
-      .fc-hd { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px;
-        padding: 2px 4px 11px; font-size: 0.98rem; font-weight: 700; line-height: 1.25; letter-spacing: .01em;
-        color: rgba(255,255,255,0.85); white-space: nowrap; }
+      /* The zone header: a fixed FRACTION band (text floats inside it — text is per-level LOD). */
+      .fc-hd { flex: 0 0 10%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+        padding: 0 1%; font-size: 0.98rem; font-weight: 700; line-height: 1.25; letter-spacing: .01em;
+        color: rgba(255,255,255,0.85); white-space: nowrap; min-height: 0; }
+      .fc-expander .fc-hd { font-size: 1.3rem; }
       /* The zone count-pill recipe carries the year / weekday sub-labels. */
       .fc-pill { flex: 0 0 auto; font-size: 0.72rem; font-weight: 600; color: rgba(255,255,255,0.62);
         background: rgba(255,255,255,0.10); border-radius: 999px; padding: 1px 8px; }
-      .fc-dowrow { flex: 0 0 auto; display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; padding: 0 0 6px; }
-      .fc-dowrow span { text-align: center; font-size: 0.6rem; font-weight: 700; color: rgba(255,255,255,0.4);
+      .fc-dowrow { flex: 0 0 6%; display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 2%;
+        align-items: center; min-height: 0; }
+      .fc-dowrow span { text-align: center; font-size: 0.72rem; font-weight: 700; color: rgba(255,255,255,0.4);
         white-space: nowrap; overflow: hidden; }
       .fc-days { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr);
-        grid-template-rows: repeat(6, 1fr); gap: 6px; }
-      /* A day bucket: the same family, sized down — translucent fill (it sits on the month's
-         glass), 1px border, fixed radius. Identical at every level it appears. */
-      .fc-day { position: relative; min-height: 0; border-radius: 10px; overflow: hidden;
+        grid-template-rows: repeat(6, 1fr); column-gap: 2%; row-gap: 2.6%; }
+      /* A day bucket: the same family — its trim scales by the SAME k, so cells coincide too. */
+      .fc-day { position: relative; min-height: 0; overflow: hidden;
+        border-radius: calc(var(--day-r, 3px) * var(--kx, 1)) / calc(var(--day-r, 3px) * var(--ky, 1));
         background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035));
-        border: 1px solid rgba(255,255,255,0.10);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+        border: solid rgba(255,255,255,0.10);
+        border-width: calc(1px * var(--ky, 1)) calc(1px * var(--kx, 1));
+        box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.08);
         transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
-      .fc-day-num { position: absolute; top: 4px; left: 7px; font-size: 0.68rem; font-weight: 700;
+      .fc-day-num { position: absolute; top: 6%; left: 7%; font-size: 0.85rem; font-weight: 700;
         color: rgba(255,255,255,0.78); line-height: 1; }
-      .fc-day-body { position: absolute; inset: 22px 6px 6px; }
+      .fc-day-body { position: absolute; inset: 24% 5% 5%; }
       .fc-today { border-color: rgba(125,180,255,0.85);
-        box-shadow: inset 0 0 0 1px rgba(125,180,255,0.45), 0 0 14px rgba(90,150,255,0.3); }
+        box-shadow: inset 0 0 0 calc(1px * var(--ky, 1)) rgba(125,180,255,0.45),
+          0 0 calc(14px * var(--ky, 1)) rgba(90,150,255,0.3); }
       /* The zone empty-state, verbatim ("Drag tickets here" → cards). */
       .fc-empty { width: 100%; margin: auto 0; padding: 14px 8px; text-align: center;
         color: rgba(255,255,255,0.38); font-size: 0.8rem; line-height: 1.4; }
@@ -159,32 +170,28 @@
 
   // Clip the year layer's single frost pass to the 12 bucket shapes (layer-layout coords — the
   // clip rides the lean transform with the layer).
-  // Proportional corners: the ticketing zone's radius FRACTION applied to each element's own
-  // size — a mini month and the expanded month are the same shape, not "oval vs sharp".
+  // Proportional corners: the ticketing zone's radius FRACTION, measured off the mini buckets and
+  // published as CSS vars — the same base × the expander's k = the same shape at every level.
   const radiusFor = (w, h) => clampN(RADIUS_F * Math.min(w, h), 2, 64);
-  const setDayRadii = (root) => {
-    const c0 = root.querySelector(".fc-day");
-    if (!c0) return;
-    const r = `${radiusFor(c0.offsetWidth, c0.offsetHeight).toFixed(1)}px`;
-    root.querySelectorAll(".fc-day").forEach((c) => { c.style.borderRadius = r; });
-  };
   const layoutFrost = () => {
     const yearEl = layers[0]; if (!yearEl) return;
     const frost = yearEl.querySelector(":scope > .fc-frost");
     const grid = yearEl.querySelector(":scope > .fc-grid");
     if (!frost || !grid) return;
+    const m0 = grid.firstElementChild, c0 = grid.querySelector(".fc-day");
+    const monR = radiusFor(m0.offsetWidth, m0.offsetHeight);
+    surface.style.setProperty("--mon-r", `${monR.toFixed(1)}px`);
+    if (c0) surface.style.setProperty("--day-r", `${radiusFor(c0.offsetWidth, c0.offsetHeight).toFixed(1)}px`);
     const gx = grid.offsetLeft, gy = grid.offsetTop;
     const parts = [...grid.children].map((m) => {
       const w = m.offsetWidth, h = m.offsetHeight;
       const x = gx + m.offsetLeft, y = gy + m.offsetTop;
-      const r = radiusFor(w, h);
-      m.style.borderRadius = `${r.toFixed(1)}px`;
+      const r = monR;
       return `M ${x + r} ${y} L ${x + w - r} ${y} A ${r} ${r} 0 0 1 ${x + w} ${y + r} ` +
         `L ${x + w} ${y + h - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} L ${x + r} ${y + h} ` +
         `A ${r} ${r} 0 0 1 ${x} ${y + h - r} L ${x} ${y + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`;
     });
     frost.style.clipPath = `path('${parts.join(" ")}')`;
-    setDayRadii(grid);
   };
 
   // ── The lean: one composited transform, cursor-anchored, gently centre-drifting ─────────
@@ -257,11 +264,14 @@
     if (isMonth) { exp.dataset.month = targetEl.dataset.month; exp.innerHTML = monthInnerHTML(+targetEl.dataset.month - 1, true); }
     else { exp.dataset.date = targetEl.dataset.date; exp.innerHTML = dayInnerHTML(targetEl.dataset.date); }
     const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;
-    Object.assign(exp.style, { top: `${TOP}px`, width: `${W}px`, height: `${EH}px`,
-      borderRadius: `${radiusFor(W, EH).toFixed(1)}px` });   // same corner PROPORTION as its mini twin
+    Object.assign(exp.style, { top: `${TOP}px`, width: `${W}px`, height: `${EH}px` });
+    // The parity factors: the expander IS its source bucket grown by (final ÷ slot) per axis —
+    // every k-scaled trim value inside then lands on the mini's pixels when mapped back onto it.
+    const b = layoutRect(targetEl, layers[level]);
+    exp.style.setProperty("--kx", (W / b.w).toFixed(4));
+    exp.style.setProperty("--ky", (EH / b.h).toFixed(4));
     return exp;
   };
-  const finishExpander = (exp) => setDayRadii(exp);   // proportional day-cell corners (needs layout → after append)
   const keyOf = (el) => (el.dataset.month ? "m" + el.dataset.month : "d" + el.dataset.date);
   // Hover = intent: pre-build (and pre-raster, at 0.001 opacity) the expander for the bucket
   // under the cursor, so the morph starts WARM — no DOM-insert/first-raster hitch at the exact
@@ -274,7 +284,6 @@
     const exp = buildExpander(targetEl);
     Object.assign(exp.style, { opacity: "0.001", pointerEvents: "none", zIndex: "1" });
     surface.appendChild(exp);
-    finishExpander(exp);
     warm = { key, el: exp };
   };
   const dropWarm = () => { if (warm) { warm.el.remove(); warm = null; } };
@@ -288,7 +297,7 @@
     const key = keyOf(targetEl);
     let exp;
     if (warm && warm.key === key) { exp = warm.el; warm = null; }
-    else { dropWarm(); exp = buildExpander(targetEl); surface.appendChild(exp); finishExpander(exp); }
+    else { dropWarm(); exp = buildExpander(targetEl); surface.appendChild(exp); }
     srcSel[level] = level === 0 ? `.fc-month[data-month="${targetEl.dataset.month}"]` : `.fc-day[data-date="${targetEl.dataset.date}"]`;
     Object.assign(exp.style, { zIndex: "5", pointerEvents: "auto", transition: "none", opacity: "0",
       transform: `translate(${r.left}px, ${r.top - TOP}px) scale(${r.width / W}, ${r.height / EH})` });
@@ -438,16 +447,23 @@
     zoom: () => gz,
     dayEl: (date) => surface?.querySelector(`.fc-day[data-date="${date}"], .fc-empty[data-date="${date}"]`) || null,
     monthEl: (m) => surface?.querySelector(`.fc-expander[data-month="${m}"], .fc-month[data-month="${m}"]`) || null,
-    // Landing-parity harness: place the expander at a month's slot at rest and diff every day
-    // cell's rect against the mini's — identical fixed styling should agree to ~0px.
-    _parity: (mIdx) => {
+    // HANDOFF-parity harness: stage the expander exactly as expand() would at the CURRENT camera —
+    // final layout, slot-mapped transform — and diff every day cell's rect against the (possibly
+    // zoomed) mini's. This is the mechanical lineup at the last stage before the transition.
+    _parity: (mIdx, opacity = 1) => {
       const mini = layers[0].querySelector(`.fc-month[data-month="${mIdx}"]`);
       const r = mini.getBoundingClientRect();
+      const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;
       const exp = document.createElement("div");
       exp.className = "fc-bucket fc-expander fc-parity";
       exp.dataset.kind = "month";
       exp.innerHTML = monthInnerHTML(mIdx - 1, true);
-      Object.assign(exp.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+      const b = layoutRect(mini, layers[0]);
+      exp.style.setProperty("--kx", (W / b.w).toFixed(4));
+      exp.style.setProperty("--ky", (EH / b.h).toFixed(4));
+      Object.assign(exp.style, { top: `${TOP}px`, width: `${W}px`, height: `${EH}px`, opacity: String(opacity),
+        transformOrigin: "0 0",
+        transform: `translate(${r.left}px, ${r.top - TOP}px) scale(${r.width / W}, ${r.height / EH})` });
       surface.appendChild(exp);
       const mc = [...mini.querySelectorAll(".fc-day")], sc = [...exp.querySelectorAll(".fc-day")];
       const deltas = mc.map((a, i) => {
@@ -455,7 +471,7 @@
         return [rb.left - ra.left, rb.top - ra.top, rb.right - ra.right, rb.bottom - ra.bottom].map((v) => +v.toFixed(2));
       });
       const worst = Math.max(...deltas.flat().map(Math.abs));
-      return { worst, day1: deltas[0], day31: deltas[deltas.length - 1] };
+      return { camera: +gz.toFixed(2), worst, day1: deltas[0], day31: deltas[deltas.length - 1] };
     },
     _parityClear: () => surface.querySelectorAll(".fc-parity").forEach((el) => el.remove()),
   };
