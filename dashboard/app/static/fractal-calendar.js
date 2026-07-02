@@ -50,43 +50,82 @@
       .fc-layer { position: absolute; inset: 0; transform-origin: 0 0; }
       .fc-year { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr);
         gap: 14px; padding: 2px; box-sizing: border-box; }
-      /* A month is a BUCKET — the exact pipeline-zone glass. (--fc-blur counter-scales the backdrop
-         blur against the zoom so the glass keeps a constant effective radius.) */
-      .fc-month { position: relative; display: flex; flex-direction: column; min-height: 0; border-radius: 16px;
-        padding: 10px 12px 12px; color: #fff; overflow: hidden;
+
+      /* ── ONE month-grid blueprint, shared by BOTH LODs ─────────────────────────────────────
+         The year-level mini month and the focused month view render the SAME structure with every
+         internal dimension in PERCENTAGES of the bucket box (header band 9%, dow row 5.5%, an
+         always-6-row day grid, %-gaps, %-insets). The mini is therefore a pixel-perfect scale
+         model of the full view — when the morph lands, every cell aligns edge to edge, and day
+         buckets are identical across all twelve months. Text sizes differ per LOD (.fc-full);
+         geometry never does. */
+      .fc-month { position: relative; }   /* the stage is a .fc-layer (absolute, inset 0) — don't override it */
+      .fc-month, .fc-stage { box-sizing: border-box; display: flex; flex-direction: column;
+        min-height: 0; border-radius: 16px; padding: 2.2% 2.8% 2.8%; color: #fff; overflow: hidden;
         background: linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
         -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%);
         border: 1px solid rgba(255,255,255,0.14);
         box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 42px rgba(0,0,0,0.28); }
-      /* Zoomed OUT: the month is just its NAME in the centre over the day texture (no header — the
-         name "writes itself" into the header as you get close, then the month view takes over). */
-      .fc-month-big { position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center;
-        font-size: 1.9rem; font-weight: 800; letter-spacing: .02em; color: rgba(255,255,255,0.88);
-        text-shadow: 0 2px 14px rgba(0,0,0,0.55); pointer-events: none; opacity: 1; transition: opacity .3s ease; }
-      .fc-month-hd { display: flex; align-items: baseline; gap: 8px; padding: 0 2px 6px;
-        font-size: 0.92rem; font-weight: 700; letter-spacing: .01em; color: rgba(255,255,255,0.85);
+      .fc-mg-hd { flex: 0 0 9%; display: flex; align-items: center; gap: 2.5%;
+        font-size: 0.62rem; font-weight: 800; letter-spacing: .01em; color: rgba(255,255,255,0.9);
         opacity: 0; transition: opacity .3s ease; }
-      .fc-cal[data-lod="near"] .fc-month-big { opacity: 0; }
-      .fc-cal[data-lod="near"] .fc-month-hd { opacity: 1; }
-      .fc-cal[data-lod="year"] .fc-day-num { opacity: 0; }
-      .fc-cal[data-lod="year"] .fc-days { opacity: 0.55; }
-      .fc-days { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr);
-        grid-auto-rows: 1fr; gap: 4px; transition: opacity .3s ease; }
-      /* A day is a bucket too — translucent fill (no backdrop blur: 365 must stay cheap), wearing
-         the pipeline's is-target blue glow on hover. */
-      .fc-day { position: relative; min-height: 0; border-radius: 7px; overflow: hidden; cursor: pointer;
+      .fc-full .fc-mg-hd { font-size: 1.3rem; opacity: 1; }
+      .fc-mg-year { font-size: 0.72em; font-weight: 600; color: rgba(255,255,255,0.42); }
+      .fc-mg-dow { flex: 0 0 5.5%; display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 1.6%;
+        align-items: center; opacity: 0; transition: opacity .3s ease; }
+      .fc-full .fc-mg-dow { opacity: 1; }
+      .fc-mg-dow span { text-align: center; font-size: 0.42rem; font-weight: 700; color: rgba(255,255,255,0.4); }
+      .fc-full .fc-mg-dow span { font-size: 0.74rem; }
+      .fc-mg-days { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr);
+        grid-template-rows: repeat(6, 1fr); column-gap: 1.6%; row-gap: 2.4%; transition: opacity .3s ease; }
+      /* A day is a bucket — translucent fill (no backdrop blur: 365 must stay cheap). */
+      .fc-day { position: relative; min-height: 0; border-radius: 6px; overflow: hidden;
         background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035));
         border: 1px solid rgba(255,255,255,0.10);
         box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
         transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
-      .fc-day:hover { border-color: rgba(125,180,255,0.92);
-        background: linear-gradient(180deg, rgba(70,110,190,0.34), rgba(40,70,130,0.26));
-        box-shadow: inset 0 0 0 1px rgba(125,180,255,0.5), 0 0 18px rgba(90,150,255,0.35); }
-      .fc-day-num { position: absolute; top: 8%; left: 9%; font-size: 0.58rem; font-weight: 700;
+      .fc-full .fc-day { border-radius: 14px; cursor: pointer; }
+      .fc-day-num { position: absolute; top: 6%; left: 7%; font-size: 0.5rem; font-weight: 700;
         color: rgba(255,255,255,0.78); line-height: 1; transition: opacity .3s ease; }
-      .fc-day-body { position: absolute; inset: 28% 6% 6% 6%; }   /* the bucket surface — cards land here later */
+      .fc-full .fc-day-num { font-size: 0.95rem; }
+      .fc-day-dow { position: absolute; top: 6%; right: 7%; font-size: 0.68rem; font-weight: 600;
+        color: rgba(255,255,255,0.38); line-height: 1; }
+      .fc-day-body { position: absolute; inset: 26% 5% 5% 5%; }   /* the bucket surface — cards land here later */
       .fc-today { border-color: rgba(125,180,255,0.85);
         box-shadow: inset 0 0 0 1px rgba(125,180,255,0.45), 0 0 14px rgba(90,150,255,0.3); }
+
+      /* At YEAR level the MONTH is the object: days are inert texture (not hover targets — they
+         aren't real at this abstraction), the bucket itself glows as the target. */
+      .fc-year .fc-day { pointer-events: none; }
+      .fc-year .fc-month { cursor: pointer; }
+      .fc-year .fc-month:hover { border-color: rgba(125,180,255,0.92);
+        box-shadow: inset 0 0 0 1px rgba(125,180,255,0.5), 0 0 30px rgba(90,150,255,0.42),
+          inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 42px rgba(0,0,0,0.28); }
+      /* Days become real, interactive buckets only INSIDE the focused month view. */
+      .fc-monthview .fc-day:hover { border-color: rgba(125,180,255,0.92);
+        background: linear-gradient(180deg, rgba(70,110,190,0.34), rgba(40,70,130,0.26));
+        box-shadow: inset 0 0 0 1px rgba(125,180,255,0.5), 0 0 18px rgba(90,150,255,0.35); }
+
+      /* Zoomed OUT: the month is its NAME in the centre over the day texture; approaching the
+         boundary the name fades and "writes itself" into the header band (same band the month
+         view's header occupies — the morph hands one straight to the other). */
+      .fc-month-big { position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center;
+        font-size: 1.9rem; font-weight: 800; letter-spacing: .02em; color: rgba(255,255,255,0.88);
+        text-shadow: 0 2px 14px rgba(0,0,0,0.55); pointer-events: none; opacity: 1; transition: opacity .3s ease; }
+      .fc-cal[data-lod="near"] .fc-month-big { opacity: 0; }
+      .fc-cal[data-lod="near"] .fc-year .fc-mg-hd { opacity: 1; }
+      .fc-cal[data-lod="year"] .fc-day-num { opacity: 0; }
+      .fc-cal[data-lod="year"] .fc-mg-days { opacity: 0.55; }
+
+      /* The DAY view mirrors a day cell's anatomy (number top-left, weekday top-right, the body
+         at the same %-insets) so its morph aligns with the cell it grows out of. */
+      .fc-dayview .fc-dv-num { position: absolute; top: 6%; left: 7%; font-size: 2.1rem; font-weight: 800;
+        line-height: 1; color: rgba(255,255,255,0.9); }
+      .fc-dayview .fc-dv-sub { position: absolute; top: 7%; right: 7%; font-size: 1rem; font-weight: 600;
+        color: rgba(255,255,255,0.45); line-height: 1; }
+      .fc-dayview-body { position: absolute; inset: 26% 5% 5% 5%; border-radius: 14px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.025));
+        border: 1px dashed rgba(210, 227, 255, 0.35); }
+
       /* PERF: layers stay GPU-promoted permanently — promoting on gesture start cost a ~300ms
          hitch. While the camera moves, backdrop blur is swapped for a matched near-opaque fill
          (re-blurring 12 panels per frame is what killed the fps); at rest the glass returns and a
@@ -95,28 +134,6 @@
       .fc-moving .fc-month, .fc-moving .fc-stage {
         -webkit-backdrop-filter: none; backdrop-filter: none;
         background: linear-gradient(180deg, rgba(38,44,58,0.92), rgba(22,27,38,0.9)); }
-
-      /* ── The FOCUSED container (a month or day loaded as a real full-size view) ─────────── */
-      .fc-stage { box-sizing: border-box; display: flex; flex-direction: column; color: #fff; border-radius: 16px;
-        padding: 16px 20px 20px; overflow: hidden;
-        background: linear-gradient(180deg, rgba(22,26,36,0.55), rgba(12,16,24,0.46));
-        -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%);
-        border: 1px solid rgba(255,255,255,0.14);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 42px rgba(0,0,0,0.28); }
-      .fc-stage-hd { display: flex; align-items: baseline; gap: 10px; padding: 0 2px 10px;
-        font-size: 1.25rem; font-weight: 800; letter-spacing: .01em; color: rgba(255,255,255,0.9); }
-      .fc-stage-sub { font-size: 0.82rem; font-weight: 600; color: rgba(255,255,255,0.45); }
-      .fc-dowrow { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; padding-bottom: 8px; }
-      .fc-dowrow span { text-align: center; font-size: 0.72rem; font-weight: 700; color: rgba(255,255,255,0.4); }
-      .fc-stage-days { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr);
-        grid-auto-rows: 1fr; gap: 10px; }
-      .fc-stage-days .fc-day { border-radius: 12px; }
-      .fc-stage-days .fc-day-num { font-size: 0.95rem; top: 9px; left: 12px; }
-      .fc-day-dow { position: absolute; top: 11px; right: 12px; font-size: 0.68rem; font-weight: 600;
-        color: rgba(255,255,255,0.38); line-height: 1; }
-      .fc-dayview-body { flex: 1 1 auto; min-height: 0; border-radius: 12px;
-        background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.025));
-        border: 1px dashed rgba(210, 227, 255, 0.35); }
     `;
     document.head.appendChild(style);
   };
@@ -130,6 +147,13 @@
       `><span class="fc-day-num">${d}</span>${dow}<div class="fc-day-body"></div></div>`;
   };
 
+  // The SHARED month grid — the year-level mini and the focused view render this exact structure,
+  // so one is a perfect scale model of the other (every dimension inside it is a percentage).
+  const mgridHTML = (m, full) =>
+    `<div class="fc-mg-hd"><span class="fc-mg-name">${MONTHS[m]}</span>${full ? `<span class="fc-mg-year">${YEAR}</span>` : ""}</div>` +
+    `<div class="fc-mg-dow">${(full ? DOW_FULL.map((d) => d.slice(0, 3)) : DOW).map((d) => `<span>${d}</span>`).join("")}</div>` +
+    `<div class="fc-mg-days">${Array.from({ length: daysIn(m) }, (_, i) => dayCellHTML(m, i + 1, full)).join("")}</div>`;
+
   const buildYear = () => {
     const el = document.createElement("div");
     el.className = "fc-layer fc-year";
@@ -137,28 +161,24 @@
       const month = document.createElement("div");
       month.className = "fc-month";
       month.dataset.month = String(m + 1);
-      month.innerHTML =
-        `<div class="fc-month-hd"><span>${MONTHS[m]}</span></div>` +
-        `<div class="fc-days">${Array.from({ length: daysIn(m) }, (_, i) => dayCellHTML(m, i + 1, false)).join("")}</div>` +
-        `<div class="fc-month-big">${MONTHS[m]}</div>`;
+      month.innerHTML = mgridHTML(m, false) + `<div class="fc-month-big">${MONTHS[m]}</div>`;
       el.appendChild(month);
     }
     return el;
   };
 
-  // A month LOADED as its own container: real layout at full size (nothing is a scaled-up pixel).
+  // A month LOADED as its own container: the same blueprint at real full size (.fc-full only
+  // changes TEXT sizes — the geometry is identical, so the morph lands cell-on-cell).
   const buildMonthView = (m) => {
     const el = document.createElement("div");
-    el.className = "fc-layer fc-stage fc-monthview";
+    el.className = "fc-layer fc-stage fc-monthview fc-full";
     el.dataset.month = String(m + 1);
-    el.innerHTML =
-      `<div class="fc-stage-hd"><span>${MONTHS[m]}</span><span class="fc-stage-sub">${YEAR}</span></div>` +
-      `<div class="fc-dowrow">${DOW_FULL.map((d) => `<span>${d.slice(0, 3)}</span>`).join("")}</div>` +
-      `<div class="fc-stage-days">${Array.from({ length: daysIn(m) }, (_, i) => dayCellHTML(m, i + 1, true)).join("")}</div>`;
+    el.innerHTML = mgridHTML(m, true);
     return el;
   };
 
-  // A single day as its own bucket view — the surface future modules drop cards onto.
+  // A single day as its own bucket view — anatomy mirrors the day cell (number top-left, weekday
+  // top-right, body at the same %-insets) so the morph aligns with the cell it grows out of.
   const buildDayView = (date) => {
     const [, mo, da] = date.split("-").map(Number);
     const d = new Date(YEAR, mo - 1, da);
@@ -166,7 +186,8 @@
     el.className = "fc-layer fc-stage fc-dayview";
     el.dataset.date = date;
     el.innerHTML =
-      `<div class="fc-stage-hd"><span>${MONTHS[mo - 1]} ${da}</span><span class="fc-stage-sub">${DOW_FULL[d.getDay()]}, ${YEAR}</span></div>` +
+      `<span class="fc-dv-num">${da}</span>` +
+      `<span class="fc-dv-sub">${DOW_FULL[d.getDay()]}, ${MONTHS[mo - 1]} ${YEAR}</span>` +
       `<div class="fc-dayview-body" data-date="${date}"></div>`;
     return el;
   };
