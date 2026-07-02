@@ -1,7 +1,7 @@
 {
-  "name": "ticketing-client",
+  "name": "fractal-calendar-planner",
   "version": "0.1.0",
-  "description": "System-tray ticketing client — companion to the status monitor (shared SSO + tickets/# MQTT)",
+  "description": "Fractal calendar planner — zoomable year of month/day buckets, same modular shell as the ticketing client",
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {

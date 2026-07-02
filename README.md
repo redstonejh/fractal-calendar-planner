@@ -1,59 +1,37 @@
-# Ticketing client
+# Fractal Calendar Planner
 
-A system-tray **ticketing** app — the companion to the [status monitor](https://github.com/redstonejh/report-monitor-tray-dashboard). It is the monitor's Electron shell with the MQTT **monitoring** layer removed, leaving a thin tickets backend.
+A zoomable **fractal year**: twelve frosted-glass month buckets, each containing its day buckets,
+on one continuous surface. Mouse over any area and **scroll to zoom into it** — the zoom anchors
+at the cursor, gliding from the whole year, into a month, down to a single day. Scroll back out
+to see everything. One year for now.
 
-## How the two apps form one ecosystem
+Every month **is a bucket**; every day **is a bucket** (`.fc-day[data-date]` with a `.fc-day-body`
+drop surface) — ready to hold cards from the other modules.
 
-| Shared thing | Mechanism |
-|---|---|
-| **Accounts / sign-in (SSO)** | Both apps read/write the same `~/.status-monitor/users.json` + `session.json`. `electron/auth.js` is byte-identical to the monitor's. Sign into one → signed into the other. |
-| **Tickets** | One retained MQTT topic tree, **`tickets/<id>`**, on the same broker (`24.121.212.206:1883`). Each ticket is a retained JSON doc; an empty retained payload is a tombstone (delete). |
+## Part of a modular ecosystem
 
-### The failure → ticket flow
+This app is built on the **same codebase and design system as the
+[ticketing client](https://github.com/redstonejh/ticketing)** — the same Electron + Vite shell,
+auth/SSO (shared `~/.status-monitor/users.json` + `session.json` sign-in), glass recipes (bucket
+gradient, is-target hover glow, easing curves, z-order/scrim conventions), and local persistence
+patterns. The ticketing pipeline UI ships in this repo intact
+(`dashboard/app/static/ticket-stacks.js` + `ticket-detail.js`); re-enable its two script tags in
+`dashboard/index.html` to combine the systems on one surface.
 
-1. The **monitor** detects a sustained outage (4+ consecutive down-minutes — the "red rising edge") and **publishes one retained ticket** to `tickets/<id>` (`maybeCreateTicket` in its `main.js`). The id is derived deterministically from the outage episode, so multiple monitors collapse to one ticket. On recovery it sets `recoveredAt` **without** closing the ticket.
-2. This **ticketing app** subscribes to `tickets/#`, caches the retained docs, and lets humans **claim / assign / resolve** — each a read-modify-write that republishes the retained doc.
+## The fractal zoom
 
-Because the messages are retained, the broker is the source of truth: a fresh launch replays every open ticket on subscribe. No local database.
+- `dashboard/app/static/fractal-calendar.js` — the whole module.
+- Zooms via the CSS **layout `zoom` property** (not a transform), so text and borders re-rasterise
+  tack-sharp at every depth; panning uses the viewport's real scroll offsets.
+- The months' backdrop blur is **counter-scaled** (`--fc-blur = 28/z`) so the effective glass blur
+  stays constant instead of exploding with the zoom.
+- Level-of-detail follows the zoom: `year` (big month names over the day-grid texture) →
+  `month` (day numbers) → `day` (weekday labels), swapped via `data-lod` on the viewport.
+- Hooks for other modules: `window.fractalCalendar.dayEl("2026-07-02")`, `.monthEl(7)`, `.zoom()`.
 
-### Ticket schema (identical on both sides)
-
-```jsonc
-{
-  "id": "…", "episodeKey": "…|null",
-  "companyId": "…", "companyLabel": "…", "host": "…",
-  "severity": "red", "state": "open|claimed|assigned|resolved",
-  "createdAt": "ISO",
-  "assignee": null, "assignedBy": null, "claimedBy": null,
-  "recoveredAt": null, "resolvedAt": null, "resolvedBy": null,
-  "updatedAt": 0, "version": 1,
-  "history": [{ "at": "ISO", "by": "user", "action": "created", "detail": "…" }]
-}
-```
-
-## Backend surface (IPC)
-
-`window.tickets`: `list`, `connectionState`, `onChanged`, `onConnection`, `claim`, `unclaim`, `assign`, `resolve`, `reopen`, `comment`, `create`, `remove`.
-`window.auth`: full account API (shared with the monitor).
-Writes require a signed-in user; **delegate** (`assign`) and **delete** require an admin.
-
-## Front end = the monitor's shell, vendored
-
-`dashboard/` is the status monitor's dashboard chrome **vendored verbatim** — the same design system (`tokens/base/components/dashboard-grid/themes/utilities.css`), glass, liquid-glass, the canonical menus (background picker, account menu, search), and the auth gate. `DESIGN_SYSTEM.md` travels with the repo. This guarantees **zero visual drift** from the monitor.
-
-What changed for ticketing:
-- The MQTT **data** runtime is neutralised: `dashboard-preload.js` exposes a **stubbed `window.dashboard`** (every channel returns empty / never fires), so the shell renders with no monitoring.
-- The monitor's default widgets (latency/loss trackers, status-timeline chart, recent-checks table) are removed from `dashboard/index.html`, leaving an **empty canonical glass workspace**.
-- The sign-in gate is rebranded **"Ticketing"** (`auth-ui.js`).
-
-The real ticketing UI is **not built yet** — it gets built on this canonical shell, where `window.tickets` is the data source. Until then the workspace is intentionally empty.
-
-> Verify visually over CDP (no HMR): `npm start -- -- --remote-debugging-port=<port>`, then drive the page target with a `ws` CDP script. Sign in with `window.auth.login('admin','admin1')`.
-
-## Run / build
+## Run
 
 ```bash
 npm install
-npm start          # add: -- -- --remote-debugging-port=9223   to verify over CDP
-npm run make       # Squirrel installer (TicketingClient-Setup.exe)
+npm start
 ```

@@ -179,7 +179,7 @@ function refreshTray() {
   if (!tray) return;
   tray.setImage(ticketConnectionState() === 'live' ? icons.blue : icons.grey);
   const open = ticketList().filter((t) => t.state !== 'resolved').length;
-  tray.setToolTip(open ? `Tickets — ${open} open` : 'Tickets');
+  tray.setToolTip(open ? `Fractal Calendar — ${open} open` : 'Fractal Calendar');
 }
 
 // ─── Auth helpers ──────────────────────────────────────────────────────────────

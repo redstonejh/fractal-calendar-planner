@@ -7,8 +7,8 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 // dashboard/ (shipped as an extraResource), exactly like the monitor's dashboard.
 module.exports = {
   packagerConfig: {
-    name: 'TicketingClient',
-    appId: 'com.status-monitor.ticketing',
+    name: 'FractalCalendarPlanner',
+    appId: 'com.status-monitor.fractal-calendar',
     asar: true,
     extraResource: ['dashboard'],
   },
@@ -18,9 +18,9 @@ module.exports = {
       name: '@electron-forge/maker-squirrel',
       platforms: ['win32'],
       config: {
-        name: 'TicketingClient',
+        name: 'FractalCalendarPlanner',
         authors: 'Status Monitor',
-        setupExe: 'TicketingClient-Setup.exe',
+        setupExe: 'FractalCalendarPlanner-Setup.exe',
         noMsi: true,
       },
     },
