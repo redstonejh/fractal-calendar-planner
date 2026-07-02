@@ -252,18 +252,49 @@
       sx: below.offsetLeft + (b.x + b.w / 2) * S - (E.x + E.w / 2),
       sy: below.offsetTop + (b.y + b.h / 2) * S - (E.y + E.h / 2) };
   };
+  // BAKE at rest: a transform-scaled layer is a stretched BITMAP — at deep framings (z~4) the
+  // compositor clamps its raster and the screen goes to mush (worse at >100% display scaling).
+  // So every SETTLED state converts to layout `zoom`: real layout at the zoomed size — text is
+  // vector-rendered and tiled, tack-sharp at any depth and any DPR. Gestures unbake back to the
+  // composited transform. Both forms render at identical positions, so the swap is invisible.
+  let baked = false;
+  const layerBase = () => (level === 0
+    ? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight }
+    : expRect());
+  const bake = () => {
+    const el = layers[level]; if (!el || transitioning) return;
+    const b = layerBase();
+    if (gz <= 1.001) {
+      el.style.zoom = ""; el.style.transform = "none";
+      el.style.left = `${b.x}px`; el.style.top = `${b.y}px`;
+      el.style.width = `${b.w}px`; el.style.height = `${b.h}px`;
+      baked = false; return;
+    }
+    el.style.transform = "none";
+    el.style.zoom = String(gz);
+    el.style.left = `${((b.x - gsx) / gz).toFixed(3)}px`;   // zoom multiplies the element's own lengths
+    el.style.top = `${((b.y - gsy) / gz).toFixed(3)}px`;
+    el.style.width = `${b.w}px`;
+    el.style.height = `${b.h}px`;
+    baked = true;
+  };
+  const unbake = () => {
+    const el = layers[level]; if (!el || !baked) return;
+    const b = layerBase();
+    el.style.zoom = "";
+    el.style.left = `${b.x}px`; el.style.top = `${b.y}px`;
+    el.style.width = `${b.w}px`; el.style.height = `${b.h}px`;
+    el.style.transition = "none";
+    el.style.transform = `translate(${-gsx}px, ${-gsy}px) scale(${gz})`;
+    void el.offsetWidth;
+    baked = false;
+  };
   const scheduleSettle = () => {
     clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
       if (transitioning) return;
       const el = layers[level]; if (el) el.style.transition = "none";
-      // idle-time demote/re-promote → raster at the final scale, tack-sharp, no next-gesture hitch
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        if (transitioning) return;
-        const l = layers[level]; if (!l) return;
-        l.style.willChange = "auto";
-        requestAnimationFrame(() => { l.style.willChange = ""; });
-      }));
+      bake();
     }, 340);
   };
 
@@ -348,6 +379,7 @@
   // ── Expand: ONE camera move — the outer world dives INTO the bucket on the very same
   //    trajectory the expander rides out of it (the iOS app-open grammar). ──────────────────
   const expand = (targetEl) => {
+    unbake();
     transitioning = true;
     const E = expRect();
     const r = targetEl.getBoundingClientRect();   // live (leaned) rect — the expander's start
@@ -384,7 +416,7 @@
       surface.dataset.level = String(level);
       surface.style.setProperty("--fc-blur", "28px");
       transitioning = false;
-      sharpen();
+      bake();
     }, MORPH_MS + 60);
   };
 
@@ -434,6 +466,7 @@
       lockedT = null;
       dropWarm();
       transitioning = false;
+      bake();                                     // deep framing at rest → layout zoom, vector-sharp
     }, MORPH_MS + 60);
   };
 
@@ -445,6 +478,7 @@
   const onWheel = (e) => {
     e.preventDefault();
     if (transitioning) return;
+    unbake();
     const px = e.clientX, py = e.clientY;
     const now = performance.now();
     const newGesture = now - lastWheelT > 450 || Math.hypot(px - lastCur.x, py - lastCur.y) > 30;
