@@ -59,12 +59,21 @@
          buckets are identical across all twelve months. Text sizes differ per LOD (.fc-full);
          geometry never does. */
       .fc-month { position: relative; }   /* the stage is a .fc-layer (absolute, inset 0) — don't override it */
+      /* EVERY px-based dimension is calc(base × --kx/--ky): the mini has k=1; a focused stage gets
+         the exact mini→stage scale factors per axis, so borders, radii and shadows land at the SAME
+         screen pixels as the mini's when the morph starts — geometry parity is by construction. */
+      /* Padding is k-scaled px, NOT percentages: %-padding resolves against WIDTH even vertically,
+         which breaks vertical parity under the morph's non-uniform scale (bucket aspect ≠ viewport). */
       .fc-month, .fc-stage { box-sizing: border-box; display: flex; flex-direction: column;
-        min-height: 0; border-radius: 16px; padding: 2.2% 2.8% 2.8%; color: #fff; overflow: hidden;
+        min-height: 0; color: #fff; overflow: hidden;
+        padding: calc(7px * var(--ky, 1)) calc(9px * var(--kx, 1)) calc(9px * var(--ky, 1));
+        border-radius: calc(16px * var(--kx, 1)) / calc(16px * var(--ky, 1));
         background: linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
         -webkit-backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%); backdrop-filter: blur(var(--fc-blur, 28px)) saturate(140%);
-        border: 1px solid rgba(255,255,255,0.14);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 42px rgba(0,0,0,0.28); }
+        border: solid rgba(255,255,255,0.14);
+        border-width: calc(1px * var(--ky, 1)) calc(1px * var(--kx, 1));
+        box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.18),
+          0 calc(18px * var(--ky, 1)) calc(42px * var(--ky, 1)) rgba(0,0,0,0.28); }
       .fc-mg-hd { flex: 0 0 9%; display: flex; align-items: center; gap: 2.5%;
         font-size: 0.62rem; font-weight: 800; letter-spacing: .01em; color: rgba(255,255,255,0.9);
         opacity: 0; transition: opacity .3s ease; }
@@ -77,13 +86,17 @@
       .fc-full .fc-mg-dow span { font-size: 0.74rem; }
       .fc-mg-days { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr);
         grid-template-rows: repeat(6, 1fr); column-gap: 1.6%; row-gap: 2.4%; transition: opacity .3s ease; }
-      /* A day is a bucket — translucent fill (no backdrop blur: 365 must stay cheap). */
-      .fc-day { position: relative; min-height: 0; border-radius: 6px; overflow: hidden;
+      /* A day is a bucket — translucent fill (no backdrop blur: 365 must stay cheap). Its border,
+         radius and highlight scale by the SAME --k factors, so a staged month's cells are
+         pixel-identical to the mini's at the morph moment. */
+      .fc-day { position: relative; min-height: 0; overflow: hidden;
+        border-radius: calc(6px * var(--kx, 1)) / calc(6px * var(--ky, 1));
         background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035));
-        border: 1px solid rgba(255,255,255,0.10);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+        border: solid rgba(255,255,255,0.10);
+        border-width: calc(1px * var(--ky, 1)) calc(1px * var(--kx, 1));
+        box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.08);
         transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
-      .fc-full .fc-day { border-radius: 14px; cursor: pointer; }
+      .fc-full .fc-day { cursor: pointer; }
       .fc-day-num { position: absolute; top: 6%; left: 7%; font-size: 0.5rem; font-weight: 700;
         color: rgba(255,255,255,0.78); line-height: 1; transition: opacity .3s ease; }
       .fc-full .fc-day-num { font-size: 0.95rem; }
@@ -91,7 +104,8 @@
         color: rgba(255,255,255,0.38); line-height: 1; }
       .fc-day-body { position: absolute; inset: 26% 5% 5% 5%; }   /* the bucket surface — cards land here later */
       .fc-today { border-color: rgba(125,180,255,0.85);
-        box-shadow: inset 0 0 0 1px rgba(125,180,255,0.45), 0 0 14px rgba(90,150,255,0.3); }
+        box-shadow: inset 0 0 0 calc(1px * var(--ky, 1)) rgba(125,180,255,0.45),
+          0 0 calc(14px * var(--ky, 1)) rgba(90,150,255,0.3); }
 
       /* At YEAR level the MONTH is the object: days are inert texture (not hover targets — they
          aren't real at this abstraction), the bucket itself glows as the target. */
@@ -116,8 +130,14 @@
       .fc-cal[data-lod="year"] .fc-day-num { opacity: 0; }
       .fc-cal[data-lod="year"] .fc-mg-days { opacity: 0.55; }
 
-      /* The DAY view mirrors a day cell's anatomy (number top-left, weekday top-right, the body
-         at the same %-insets) so its morph aligns with the cell it grows out of. */
+      /* The DAY view mirrors a day CELL exactly: the cell's radius/border/fill bases (× the
+         compounded --k factors) and the cell's translucent-white fill layered over the month
+         glass, so the morph from cell to day view is pixel-continuous too. */
+      .fc-dayview { border-radius: calc(6px * var(--kx, 1)) / calc(6px * var(--ky, 1));
+        border-color: rgba(255,255,255,0.10);
+        background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035)),
+          linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
+        box-shadow: inset 0 calc(1px * var(--ky, 1)) 0 rgba(255,255,255,0.08); }
       .fc-dayview .fc-dv-num { position: absolute; top: 6%; left: 7%; font-size: 2.1rem; font-weight: 800;
         line-height: 1; color: rgba(255,255,255,0.9); }
       .fc-dayview .fc-dv-sub { position: absolute; top: 7%; right: 7%; font-size: 1rem; font-weight: 600;
@@ -134,6 +154,9 @@
       .fc-moving .fc-month, .fc-moving .fc-stage {
         -webkit-backdrop-filter: none; backdrop-filter: none;
         background: linear-gradient(180deg, rgba(38,44,58,0.92), rgba(22,27,38,0.9)); }
+      .fc-moving .fc-dayview {   /* keep the cell's white wash over the opaque swap */
+        background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035)),
+          linear-gradient(180deg, rgba(38,44,58,0.92), rgba(22,27,38,0.9)); }
     `;
     document.head.appendChild(style);
   };
@@ -257,6 +280,23 @@
     return hit || best;
   };
 
+  // Pixel-parity factors: the stage's box is the mini bucket's box grown by (vp/miniLayout) per
+  // axis — every px dimension inside it multiplies by these, so at the morph's first frame the
+  // stage's borders/radii/shadows occupy the SAME screen pixels as the mini's.
+  const setParityVars = (stage, srcEl) => {
+    const vr = viewport.getBoundingClientRect();
+    const lr = layers[level].getBoundingClientRect();
+    const sr = srcEl.getBoundingClientRect();
+    // layout (untransformed) size of the source bucket = its on-screen size ÷ the layer's scale
+    const lw = sr.width / (lr.width / vr.width), lh = sr.height / (lr.height / vr.height);
+    // COMPOUND the outer layer's factors: a day cell inside a focused month already wears the
+    // month's k (its 1px border is k layout px), so the day view must grow from THAT base.
+    const pk = layers[level].style;
+    const pkx = parseFloat(pk.getPropertyValue("--kx")) || 1, pky = parseFloat(pk.getPropertyValue("--ky")) || 1;
+    stage.style.setProperty("--kx", (pkx * (vr.width / lw)).toFixed(4));
+    stage.style.setProperty("--ky", (pky * (vr.height / lh)).toFixed(4));
+  };
+
   // ── The seamless boundary: FLIP the focused container in/out ───────────────
   const focusIn = (targetEl) => {
     transitioning = true;
@@ -264,6 +304,7 @@
     const vr = viewport.getBoundingClientRect();
     const r = targetEl.getBoundingClientRect();
     const stage = level === 0 ? buildMonthView(+targetEl.dataset.month - 1) : buildDayView(targetEl.dataset.date);
+    setParityVars(stage, targetEl);
     // The incoming container starts EXACTLY over the bucket it comes from…
     const srcTransform = `translate(${r.left - vr.left}px, ${r.top - vr.top}px) scale(${r.width / vr.width}, ${r.height / vr.height})`;
     stage.style.transformOrigin = "0 0";
@@ -378,6 +419,30 @@
     zoom: () => gz,
     dayEl: (date) => viewport?.querySelector(`.fc-day[data-date="${date}"], .fc-dayview-body[data-date="${date}"]`) || null,
     monthEl: (m) => viewport?.querySelector(`.fc-month[data-month="${m}"], .fc-monthview[data-month="${m}"]`) || null,
+    // Parity harness: stage the month view over its mini at the CURRENT zoom (exactly as focusIn
+    // would) and measure every day cell's rect against its mini twin. worst < 0.5px = seamless.
+    _parity: (mIdx, opacity = 1) => {
+      const mini = layers[0].querySelector(`.fc-month[data-month="${mIdx}"]`);
+      const vr = viewport.getBoundingClientRect();
+      const r = mini.getBoundingClientRect();
+      const stage = buildMonthView(mIdx - 1);
+      setParityVars(stage, mini);
+      stage.classList.add("fc-parity");
+      stage.style.transformOrigin = "0 0";
+      stage.style.transform = `translate(${r.left - vr.left}px, ${r.top - vr.top}px) scale(${r.width / vr.width}, ${r.height / vr.height})`;
+      stage.style.opacity = String(opacity);
+      viewport.appendChild(stage);
+      const mc = [...mini.querySelectorAll(".fc-day")], sc = [...stage.querySelectorAll(".fc-day")];
+      const deltas = mc.map((a, i) => {
+        const ra = a.getBoundingClientRect(), rb = sc[i].getBoundingClientRect();
+        return [rb.left - ra.left, rb.top - ra.top, rb.right - ra.right, rb.bottom - ra.bottom].map((v) => +v.toFixed(2));
+      });
+      const worst = Math.max(...deltas.flat().map(Math.abs));
+      const hd = ((a, b) => [b.left - a.left, b.top - a.top, b.bottom - a.bottom].map((v) => +v.toFixed(2)))(
+        mini.querySelector(".fc-mg-hd").getBoundingClientRect(), stage.querySelector(".fc-mg-hd").getBoundingClientRect());
+      return { worst, headerDelta: hd, day1: deltas[0], day31: deltas[deltas.length - 1] };
+    },
+    _parityClear: () => viewport.querySelectorAll(".fc-parity").forEach((el) => el.remove()),
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
