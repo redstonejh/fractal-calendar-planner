@@ -14,8 +14,8 @@
   const YEAR = 2026;                          // one year for now
   const EASE = "cubic-bezier(.22, 1, .26, 1)";
   const MORPH_MS = 460;                       // expand/contract duration
-  const LEAN_MAX = 2.8;                       // a REAL runway (~4 wheel ticks) before the handoff
-  const CENTER_Z = 2.0;                       // by this zoom the target is fully centred — lined up for the swap
+  const TICK_K = 0.42;                        // each wheel tick covers this fraction of what REMAINS to the locked framing
+  const HANDOFF_RATIO = 1.22;                 // remaining zoom ≤ this → swap in the real container (negligible travel)
   const RADIUS_F = 16 / 245;                  // the ticketing zone's corner PROPORTION (16px on its ~245px side):
                                               // perceived roundness is relative to size, so the radius scales
                                               // with each bucket — same shape at every level, no capsule minis
@@ -29,9 +29,9 @@
   let layers = [null, null, null];            // the live element per level (year layer persists)
   let srcSel = [null, null];                  // how to find the slot each expander contracts back into
   let transitioning = false;
-  let gz = 1, gsx = 0, gsy = 0;               // the current level's lean (target values; CSS transition glides)
+  let gz = 1, gsx = 0, gsy = 0;               // the current level's camera (target values; CSS transition glides)
   let settleTimer = 0;
-  let anchorC = null, lastCur = { x: -1, y: -1 }, lastWheelT = 0;
+  let lockedT = null, lastCur = { x: -1, y: -1 }, lastWheelT = 0;   // the gesture's LOCKED target bucket
 
   const clampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   const daysIn = (m) => new Date(YEAR, m + 1, 0).getDate();
@@ -194,12 +194,16 @@
     el.style.transform = `translate(${-gsx}px, ${-gsy}px) scale(${gz})`;
     surface.style.setProperty("--fc-blur", `${(28 / gz).toFixed(1)}px`);   // constant effective frost
   };
-  const clampS = () => {
-    // The clamp loosens as the lean deepens: centring an edge/corner bucket needs the world's
-    // edge to travel inside the frame (the expansion re-frames everything moments later).
-    const pad = clampN((gz - 1) / (CENTER_Z - 1), 0, 1) * window.innerWidth * 0.45;
-    gsx = clampN(gsx, -pad, window.innerWidth * (gz - 1) + pad);
-    gsy = clampN(gsy, -pad, window.innerHeight * (gz - 1) + pad);
+  // The LOCKED framing of a bucket: uniform contain-fit of its slot inside the expanded view's
+  // rect, centred — the fixed destination every wheel tick steps toward.
+  const framingFor = (targetEl) => {
+    const below = layers[level];
+    const b = layoutRect(targetEl, below);
+    const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;
+    const S = Math.min(W / b.w, EH / b.h);
+    return { s: S,
+      sx: below.offsetLeft + (b.x + b.w / 2) * S - W / 2,
+      sy: below.offsetTop + (b.y + b.h / 2) * S - (TOP + EH / 2) };
   };
   const scheduleSettle = () => {
     clearTimeout(settleTimer);
@@ -318,9 +322,10 @@
   };
 
   // ── Contract: back into the slot, crossfading onto its pixel-identical twin ─────────────
-  // ── Contract: the reverse camera move — the outer world rides back OUT of the bucket while
-  //    the expander shrinks home, crossfading onto its pixel-identical twin at the landing. ──
-  const contract = () => {
+  // ── Contract: the reverse camera move. The outer world rides back OUT of the bucket and
+  //    settles at the bucket's LOCKED FRAMING (contain-fit, centred) — so continuing to scroll
+  //    out steps down stage by stage, symmetric with the way in. Escape rides all the way out. ──
+  const contract = (fullOut) => {
     transitioning = true;
     const exp = layers[level];
     const below = layers[level - 1];
@@ -328,22 +333,27 @@
     const src = below.querySelector(srcSel[level - 1]);
     // slot geometry from LAYOUT, sub-pixel (below is parked at identity — rects are layout-true)
     const b = layoutRect(src, below);
-    const rx = below.offsetLeft + b.x, ry = below.offsetTop + b.y;
     const KX = W / b.w, KY = EH / b.h;
     const dive = `translate(${(-b.x * KX).toFixed(2)}px, ${(TOP - below.offsetTop - b.y * KY).toFixed(2)}px) scale(${KX.toFixed(4)}, ${KY.toFixed(4)})`;
+    // The landing framing: identity for a full ride-out (Escape), else the locked contain-fit.
+    const S = fullOut ? 1 : Math.min(W / b.w, EH / b.h);
+    const fsx = fullOut ? 0 : below.offsetLeft + (b.x + b.w / 2) * S - W / 2;
+    const fsy = fullOut ? 0 : below.offsetTop + (b.y + b.h / 2) * S - (TOP + EH / 2);
+    // the slot's screen rect UNDER that framing = where the expander shrinks to
+    const rx = below.offsetLeft + b.x * S - fsx, ry = below.offsetTop + b.y * S - fsy;
     below.style.transition = "none";
     below.style.transform = dive;                 // start deep inside the bucket…
     below.style.opacity = "0";
     below.style.visibility = "";
     exp.style.transition = "none";
-    exp.style.transform = "none";                 // shed any lean before travelling home
+    exp.style.transform = "none";                 // shed any camera before travelling home
     void below.offsetWidth;
     requestAnimationFrame(() => {
       below.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${MORPH_MS}ms ease`;
-      below.style.transform = "none";             // …and ride back out to rest
+      below.style.transform = `translate(${(-fsx).toFixed(2)}px, ${(-fsy).toFixed(2)}px) scale(${S.toFixed(4)})`;
       below.style.opacity = "1";
       exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.45)}ms ease ${Math.round(MORPH_MS * 0.55)}ms`;
-      exp.style.transform = `translate(${rx.toFixed(2)}px, ${(ry - TOP).toFixed(2)}px) scale(${(b.w / W).toFixed(4)}, ${(b.h / EH).toFixed(4)})`;
+      exp.style.transform = `translate(${rx.toFixed(2)}px, ${(ry - TOP).toFixed(2)}px) scale(${(b.w * S / W).toFixed(4)}, ${(b.h * S / EH).toFixed(4)})`;
       exp.style.opacity = "0";
     });
     setTimeout(() => {
@@ -351,41 +361,43 @@
       layers[level] = null;
       level -= 1;
       surface.dataset.level = String(level);
-      gz = 1; gsx = 0; gsy = 0;
-      surface.style.setProperty("--fc-blur", "28px");
-      anchorC = null;
+      gz = S; gsx = fsx; gsy = fsy;               // the camera continues from the landing framing
+      apply(false);
+      surface.style.setProperty("--fc-blur", `${(28 / gz).toFixed(1)}px`);
+      lockedT = null;
       dropWarm();
       transitioning = false;
     }, MORPH_MS + 60);
   };
 
-  // ── Wheel: lean toward the cursor; the ceiling expands, the floor contracts ─────────────
+  // ── Wheel: every tick is ONE STAGE closer to the locked framing ─────────────────────────
+  // The gesture locks a target bucket; each tick-in covers TICK_K of the REMAINING distance to
+  // its contain-fit framing (so every single tick visibly approaches the locked month viewport);
+  // once the remaining zoom is negligible the real container swaps in with near-zero travel.
+  // Ticks out step back toward identity the same way; at rest, one more tick contracts a level.
   const onWheel = (e) => {
     e.preventDefault();
     if (transitioning) return;
     const px = e.clientX, py = e.clientY;
-    const zoomingIn = e.deltaY < 0;
-    if (!zoomingIn && gz <= 1.001 && level > 0) { contract(); return; }
-    const nz = clampN(gz * Math.exp(-e.deltaY * 0.0022), 1, LEAN_MAX);
     const now = performance.now();
-    if (!anchorC || now - lastWheelT > 450 || Math.hypot(px - lastCur.x, py - lastCur.y) > 30) {
-      anchorC = { x: (px + gsx) / gz, y: (py + gsy) / gz };   // lock the gesture's target point
-    }
+    const newGesture = now - lastWheelT > 450 || Math.hypot(px - lastCur.x, py - lastCur.y) > 30;
     lastWheelT = now; lastCur = { x: px, y: py };
-    // The camera steers the target to the EXPANDER'S final centre while zooming — fully lined up
-    // well before the ceiling, so the handoff swap is invisible: same spot, same shape, more detail.
-    const bias = clampN((nz - 1) / (CENTER_Z - 1), 0, 1);
-    const CX = window.innerWidth / 2, CY = 48 + (window.innerHeight - 48) / 2;
-    const ax = px + (CX - px) * bias, ay = py + (CY - py) * bias;
-    gsx = anchorC.x * nz - ax;
-    gsy = anchorC.y * nz - ay;
-    gz = nz;
-    clampS();
-    if (zoomingIn && gz >= LEAN_MAX - 0.01 && level < 2) {
-      const t = targetAt(anchorC.x, anchorC.y);
-      anchorC = null;
-      if (t) { expand(t); return; }
+    if (e.deltaY > 0) {                                        // ── stepping OUT
+      if (gz <= 1.02 && level > 0) { contract(false); return; }
+      gz += (1 - gz) * TICK_K; gsx -= gsx * TICK_K; gsy -= gsy * TICK_K;
+      if (gz <= 1.15) { gz = 1; gsx = 0; gsy = 0; lockedT = null; }   // symmetric tick-count with the way in
+      apply(true); scheduleSettle(); return;
     }
+    if (level >= 2) return;                                    // a day is the deepest bucket (for now)
+    if (newGesture || !lockedT || !lockedT.isConnected) {      // ── lock the gesture's target
+      const layer = layers[level];
+      lockedT = targetAt((px - layer.offsetLeft + gsx) / gz, (py - layer.offsetTop + gsy) / gz);
+      if (lockedT) prefetch(lockedT);
+    }
+    if (!lockedT) return;
+    const F = framingFor(lockedT);
+    gz += (F.s - gz) * TICK_K; gsx += (F.sx - gsx) * TICK_K; gsy += (F.sy - gsy) * TICK_K;
+    if (F.s / gz <= HANDOFF_RATIO) { const t = lockedT; lockedT = null; expand(t); return; }
     apply(true);
     scheduleSettle();
   };
@@ -409,7 +421,7 @@
     };
     surface.addEventListener("click", (e) => { const t = clickTarget(e); if (t) expand(t); });
     surface.addEventListener("mouseover", (e) => { const t = clickTarget(e); if (t) prefetch(t); });
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && level > 0 && !transitioning) contract(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && level > 0 && !transitioning) contract(true); });
     window.addEventListener("resize", () => {
       gz = 1; gsx = 0; gsy = 0; apply(false);
       dropWarm();
