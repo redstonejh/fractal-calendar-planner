@@ -14,7 +14,11 @@
   const YEAR = 2026;                          // one year for now
   const EASE = "cubic-bezier(.22, 1, .26, 1)";
   const MORPH_MS = 460;                       // expand/contract duration
-  const LEAN_MAX = 1.5;                       // lean ceiling — crossing it expands the target bucket
+  const LEAN_MAX = 2.8;                       // a REAL runway (~4 wheel ticks) before the handoff
+  const CENTER_Z = 2.0;                       // by this zoom the target is fully centred — lined up for the swap
+  const RADIUS_F = 16 / 245;                  // the ticketing zone's corner PROPORTION (16px on its ~245px side):
+                                              // perceived roundness is relative to size, so the radius scales
+                                              // with each bucket — same shape at every level, no capsule minis
   const MONTHS = ["January", "February", "March", "April", "May", "June",
                   "July", "August", "September", "October", "November", "December"];
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -155,6 +159,15 @@
 
   // Clip the year layer's single frost pass to the 12 bucket shapes (layer-layout coords — the
   // clip rides the lean transform with the layer).
+  // Proportional corners: the ticketing zone's radius FRACTION applied to each element's own
+  // size — a mini month and the expanded month are the same shape, not "oval vs sharp".
+  const radiusFor = (w, h) => clampN(RADIUS_F * Math.min(w, h), 2, 64);
+  const setDayRadii = (root) => {
+    const c0 = root.querySelector(".fc-day");
+    if (!c0) return;
+    const r = `${radiusFor(c0.offsetWidth, c0.offsetHeight).toFixed(1)}px`;
+    root.querySelectorAll(".fc-day").forEach((c) => { c.style.borderRadius = r; });
+  };
   const layoutFrost = () => {
     const yearEl = layers[0]; if (!yearEl) return;
     const frost = yearEl.querySelector(":scope > .fc-frost");
@@ -162,13 +175,16 @@
     if (!frost || !grid) return;
     const gx = grid.offsetLeft, gy = grid.offsetTop;
     const parts = [...grid.children].map((m) => {
-      const x = gx + m.offsetLeft, y = gy + m.offsetTop, w = m.offsetWidth, h = m.offsetHeight;
-      const r = Math.min(16, w / 2, h / 2);
+      const w = m.offsetWidth, h = m.offsetHeight;
+      const x = gx + m.offsetLeft, y = gy + m.offsetTop;
+      const r = radiusFor(w, h);
+      m.style.borderRadius = `${r.toFixed(1)}px`;
       return `M ${x + r} ${y} L ${x + w - r} ${y} A ${r} ${r} 0 0 1 ${x + w} ${y + r} ` +
         `L ${x + w} ${y + h - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} L ${x + r} ${y + h} ` +
         `A ${r} ${r} 0 0 1 ${x} ${y + h - r} L ${x} ${y + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`;
     });
     frost.style.clipPath = `path('${parts.join(" ")}')`;
+    setDayRadii(grid);
   };
 
   // ── The lean: one composited transform, cursor-anchored, gently centre-drifting ─────────
@@ -179,8 +195,11 @@
     surface.style.setProperty("--fc-blur", `${(28 / gz).toFixed(1)}px`);   // constant effective frost
   };
   const clampS = () => {
-    gsx = clampN(gsx, 0, window.innerWidth * (gz - 1));
-    gsy = clampN(gsy, 0, window.innerHeight * (gz - 1));
+    // The clamp loosens as the lean deepens: centring an edge/corner bucket needs the world's
+    // edge to travel inside the frame (the expansion re-frames everything moments later).
+    const pad = clampN((gz - 1) / (CENTER_Z - 1), 0, 1) * window.innerWidth * 0.45;
+    gsx = clampN(gsx, -pad, window.innerWidth * (gz - 1) + pad);
+    gsy = clampN(gsy, -pad, window.innerHeight * (gz - 1) + pad);
   };
   const scheduleSettle = () => {
     clearTimeout(settleTimer);
@@ -234,9 +253,11 @@
     if (isMonth) { exp.dataset.month = targetEl.dataset.month; exp.innerHTML = monthInnerHTML(+targetEl.dataset.month - 1, true); }
     else { exp.dataset.date = targetEl.dataset.date; exp.innerHTML = dayInnerHTML(targetEl.dataset.date); }
     const W = window.innerWidth, TOP = 48, EH = window.innerHeight - TOP;
-    Object.assign(exp.style, { top: `${TOP}px`, width: `${W}px`, height: `${EH}px` });
+    Object.assign(exp.style, { top: `${TOP}px`, width: `${W}px`, height: `${EH}px`,
+      borderRadius: `${radiusFor(W, EH).toFixed(1)}px` });   // same corner PROPORTION as its mini twin
     return exp;
   };
+  const finishExpander = (exp) => setDayRadii(exp);   // proportional day-cell corners (needs layout → after append)
   const keyOf = (el) => (el.dataset.month ? "m" + el.dataset.month : "d" + el.dataset.date);
   // Hover = intent: pre-build (and pre-raster, at 0.001 opacity) the expander for the bucket
   // under the cursor, so the morph starts WARM — no DOM-insert/first-raster hitch at the exact
@@ -249,6 +270,7 @@
     const exp = buildExpander(targetEl);
     Object.assign(exp.style, { opacity: "0.001", pointerEvents: "none", zIndex: "1" });
     surface.appendChild(exp);
+    finishExpander(exp);
     warm = { key, el: exp };
   };
   const dropWarm = () => { if (warm) { warm.el.remove(); warm = null; } };
@@ -262,7 +284,7 @@
     const key = keyOf(targetEl);
     let exp;
     if (warm && warm.key === key) { exp = warm.el; warm = null; }
-    else { dropWarm(); exp = buildExpander(targetEl); surface.appendChild(exp); }
+    else { dropWarm(); exp = buildExpander(targetEl); surface.appendChild(exp); finishExpander(exp); }
     srcSel[level] = level === 0 ? `.fc-month[data-month="${targetEl.dataset.month}"]` : `.fc-day[data-date="${targetEl.dataset.date}"]`;
     Object.assign(exp.style, { zIndex: "5", pointerEvents: "auto", transition: "none", opacity: "0",
       transform: `translate(${r.left}px, ${r.top - TOP}px) scale(${r.width / W}, ${r.height / EH})` });
@@ -350,9 +372,11 @@
       anchorC = { x: (px + gsx) / gz, y: (py + gsy) / gz };   // lock the gesture's target point
     }
     lastWheelT = now; lastCur = { x: px, y: py };
-    // the anchor drifts toward the centre as the lean deepens — the target self-centres
-    const bias = clampN((nz - 1) / (LEAN_MAX - 1), 0, 1) * 0.6;
-    const ax = px + (window.innerWidth / 2 - px) * bias, ay = py + (window.innerHeight / 2 - py) * bias;
+    // The camera steers the target to the EXPANDER'S final centre while zooming — fully lined up
+    // well before the ceiling, so the handoff swap is invisible: same spot, same shape, more detail.
+    const bias = clampN((nz - 1) / (CENTER_Z - 1), 0, 1);
+    const CX = window.innerWidth / 2, CY = 48 + (window.innerHeight - 48) / 2;
+    const ax = px + (CX - px) * bias, ay = py + (CY - py) * bias;
     gsx = anchorC.x * nz - ax;
     gsy = anchorC.y * nz - ay;
     gz = nz;
