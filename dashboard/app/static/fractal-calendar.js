@@ -40,6 +40,7 @@
   let layers = [null, null, null];            // the live element per level (year layer persists)
   let srcSel = [null, null];                  // how to find the slot each expander contracts back into
   let transitioning = false;
+  let transitionSeq = 0;
 
   const clampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   const daysIn = (m) => new Date(YEAR, m + 1, 0).getDate();
@@ -258,6 +259,14 @@
     warm = { key, el: exp };
   };
   const dropWarm = () => { if (warm) { warm.el.remove(); warm = null; } };
+  const once = (fn) => {
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      fn();
+    };
+  };
   const afterTransform = (el, fn) => {
     let done = false;
     const finish = () => {
@@ -273,11 +282,12 @@
     const fallback = setTimeout(finish, MORPH_MS + 25);
     el.addEventListener("transitionend", onEnd);
   };
-
   // ── Expand: ONE camera move — the world dives INTO the bucket on the same trajectory the
   //    real view rides out of its slot. Uniform scale (matched aspects): nothing stretches. ──
   const expand = (targetEl) => {
+    const seq = ++transitionSeq;
     transitioning = true;
+    surface.querySelectorAll(".fc-contracting-expander").forEach((el) => el.remove());
     const E = expRect();
     const r = targetEl.getBoundingClientRect();
     const key = keyOf(targetEl);
@@ -288,6 +298,8 @@
     Object.assign(exp.style, { zIndex: "5", pointerEvents: "auto", transition: "none", opacity: "0",
       transform: `translate(${(r.left - E.x).toFixed(2)}px, ${(r.top - E.y).toFixed(2)}px) scale(${(r.width / E.w).toFixed(5)}, ${(r.height / E.h).toFixed(5)})` });
     const below = layers[level];
+    below.style.zIndex = "0";
+    below.style.pointerEvents = "none";
     const b = layoutRect(targetEl, below);
     const KX = E.w / b.w, KY = E.h / b.h;
     const dive = `translate(${(E.x - below.offsetLeft - b.x * KX).toFixed(2)}px, ${(E.y - below.offsetTop - b.y * KY).toFixed(2)}px) scale(${KX.toFixed(4)}, ${KY.toFixed(4)})`;
@@ -300,21 +312,28 @@
       below.style.transform = dive;
       below.style.opacity = "0";
     });
-    afterTransform(exp, () => {
-      exp.style.transition = "none";
-      below.style.transition = "none";
-      below.style.visibility = "hidden";
-      below.style.transform = "none"; below.style.opacity = "1";   // parked at identity for the return
+    const commitExpand = once(() => {
       level += 1;
       layers[level] = exp;
       surface.dataset.level = String(level);
       transitioning = false;
+    });
+    commitExpand();
+    afterTransform(exp, () => {
+      if (seq !== transitionSeq) return;
+      commitExpand();
+      exp.style.transition = "none";
+      below.style.transition = "none";
+      below.style.visibility = "hidden";
+      below.style.transform = "none"; below.style.opacity = "1";   // parked at identity for the return
+      below.style.pointerEvents = "";
     });
   };
 
   // ── Contract (B / Escape): the reverse camera move, landing at rest. ────────────────────
   const contract = () => {
     if (level === 0 || transitioning) return;
+    const seq = ++transitionSeq;
     transitioning = true;
     const exp = layers[level];
     const below = layers[level - 1];
@@ -325,28 +344,42 @@
     const dive = `translate(${(E.x - below.offsetLeft - b.x * KX).toFixed(2)}px, ${(E.y - below.offsetTop - b.y * KY).toFixed(2)}px) scale(${KX.toFixed(4)}, ${KY.toFixed(4)})`;
     const rx = below.offsetLeft + b.x, ry = below.offsetTop + b.y;
     below.style.transition = "none";
-    below.style.transform = dive;                 // start deep inside the bucket…
+    below.style.zIndex = "5";
+    below.style.pointerEvents = "auto";
+    below.style.transform = dive;
     below.style.opacity = "1";
     below.style.visibility = "";
     exp.style.transition = "none";
+    exp.style.zIndex = "4";
+    exp.style.pointerEvents = "none";
     exp.style.opacity = "1";
     exp.classList.add("fc-contracting-expander");
-    void below.offsetWidth;
-    requestAnimationFrame(() => {
-      below.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
-      below.style.transform = "none";             // …and ride back out to rest
-      below.style.opacity = "1";
-      exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.35)}ms ease ${Math.round(MORPH_MS * 0.65)}ms`;
-      exp.style.transform = `translate(${(rx - E.x).toFixed(2)}px, ${(ry - E.y).toFixed(2)}px) scale(${(b.w / E.w).toFixed(5)}, ${(b.h / E.h).toFixed(5)})`;
-      exp.style.opacity = "0";
-    });
-    afterTransform(below, () => {
-      exp.remove();
-      layers[level] = null;
+    const oldLevel = level;
+    const commitContract = once(() => {
+      layers[oldLevel] = null;
       level -= 1;
       surface.dataset.level = String(level);
       dropWarm();
       transitioning = false;
+    });
+    commitContract();
+    void below.offsetWidth;
+    requestAnimationFrame(() => {
+      if (seq !== transitionSeq) return;
+      below.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
+      below.style.transform = "none";
+      exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.35)}ms ease ${Math.round(MORPH_MS * 0.65)}ms`;
+      exp.style.transform = `translate(${(rx - E.x).toFixed(2)}px, ${(ry - E.y).toFixed(2)}px) scale(${(b.w / E.w).toFixed(5)}, ${(b.h / E.h).toFixed(5)})`;
+      exp.style.opacity = "0";
+    });
+    afterTransform(exp, () => {
+      if (seq !== transitionSeq) {
+        exp.remove();
+        return;
+      }
+      commitContract();
+      below.style.zIndex = "";
+      exp.remove();
     });
   };
 
@@ -363,12 +396,29 @@
     measureTop();
     // Buckets that glow are buttons: click zooms in; B / Escape steps back out. Hover pre-warms.
     const clickTarget = (e) => {
-      if (transitioning || level >= 2) return null;
+      if (level >= 2) return null;
       const t = level === 0 ? e.target.closest?.(".fc-month") : e.target.closest?.(".fc-day");
-      return t && layers[level].contains(t) ? t : null;
+      return t && layers[level]?.contains(t) ? t : null;
     };
-    surface.addEventListener("click", (e) => { const t = clickTarget(e); if (t) expand(t); });
-    surface.addEventListener("mouseover", (e) => { const t = clickTarget(e); if (t) prefetch(t); });
+    const bucketAt = (x, y) => {
+      if (level >= 2) return null;
+      const layer = layers[level];
+      if (!layer) return null;
+      const selector = level === 0 ? ".fc-month" : ".fc-day";
+      return [...layer.querySelectorAll(selector)].find((bucket) => {
+        const r = bucket.getBoundingClientRect();
+        return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+      }) || null;
+    };
+    document.addEventListener("click", (e) => {
+      if (e.target && e.target.closest?.(".window-control-cluster, .background-tone-menu, .auth-shell, .auth-modal-backdrop")) return;
+      const t = clickTarget(e) || bucketAt(e.clientX, e.clientY);
+      if (t) { e.preventDefault(); expand(t); }
+    }, true);
+    document.addEventListener("mousemove", (e) => {
+      const t = bucketAt(e.clientX, e.clientY);
+      if (t) prefetch(t);
+    }, true);
     document.addEventListener("keydown", (e) => {
       if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
       if (e.key === "b" || e.key === "B" || e.key === "Escape") contract();
