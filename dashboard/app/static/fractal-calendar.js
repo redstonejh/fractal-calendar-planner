@@ -45,7 +45,6 @@
   const daysIn = (m) => new Date(YEAR, m + 1, 0).getDate();
   const firstDow = (m) => new Date(YEAR, m, 1).getDay();
   const iso = (m, d) => `${YEAR}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  const todayIso = (() => { const n = new Date(); return n.getFullYear() === YEAR ? iso(n.getMonth(), n.getDate()) : ""; })();
 
   const ensureStyles = () => {
     if (document.getElementById("fractal-calendar-styles")) return;
@@ -70,6 +69,7 @@
          a mini and its expanded view have interiors in IDENTICAL relative positions. ── */
       .fc-bucket { position: relative; box-sizing: border-box; display: flex; flex-direction: column; min-height: 0;
         overflow: hidden; color: #fff; border: 0;
+        container-type: size;
         border-radius: calc(var(--mon-r, 16px) * var(--kx, 1)) / calc(var(--mon-r, 16px) * var(--ky, 1));
         padding: calc(8px * var(--ky, 1)) calc(10px * var(--kx, 1)) calc(10px * var(--ky, 1));
         background: linear-gradient(180deg, rgba(22,26,36,0.5), rgba(12,16,24,0.42));
@@ -78,18 +78,17 @@
         transition: box-shadow .18s ease, background .18s ease; }
       /* The zone header: a fixed FRACTION band. */
       .fc-hd { flex: 0 0 9%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
-        padding: 0 1%; font-size: 0.98rem; font-weight: 700; line-height: 1.25; letter-spacing: .01em;
+        padding: 0 1%; font-size: clamp(0.98rem, 8cqh, 1.15rem); font-weight: 700; line-height: 1.05;
         color: rgba(255,255,255,0.85); white-space: nowrap; min-height: 0; }
-      .fc-expander .fc-hd { font-size: 1.3rem; }
-      /* The zone count-pill recipe carries the day view's weekday label. */
-      .fc-pill { flex: 0 0 auto; font-size: 0.72rem; font-weight: 600; color: rgba(255,255,255,0.62);
-        background: rgba(255,255,255,0.10); border-radius: 999px; padding: 1px 8px; }
+      .fc-expander .fc-hd { font-size: clamp(1.15rem, 3.2cqh, 1.7rem); }
+      .fc-expander[data-kind="day"] .fc-hd { font-size: clamp(1.05rem, 2.8cqh, 1.45rem); }
       .fc-dowrow { flex: 0 0 5%; display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 1.6%;
         align-items: center; min-height: 0; }
       .fc-dowrow span { text-align: center; font-size: 0.72rem; font-weight: 700; color: rgba(255,255,255,0.4);
         white-space: nowrap; overflow: hidden; }
       .fc-days { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr);
         grid-template-rows: repeat(6, 1fr); column-gap: 1.6%; row-gap: 2%; }
+      .fc-day-spacer { min-height: 0; visibility: hidden; pointer-events: none; }
       /* A day bucket: the same family — trim scales by the SAME k, so cells coincide too. */
       .fc-day { position: relative; min-height: 0; overflow: hidden; border: 0;
         border-radius: calc(var(--day-r, 3px) * var(--kx, 1)) / calc(var(--day-r, 3px) * var(--ky, 1));
@@ -100,9 +99,6 @@
       .fc-day-num { position: absolute; top: 6%; left: 7%; font-size: 0.85rem; font-weight: 700;
         color: rgba(255,255,255,0.78); line-height: 1; }
       .fc-day-body { position: absolute; inset: 24% 5% 5%; }
-      .fc-today { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10),
-        inset 0 0 0 2px rgba(125,180,255,0.45),
-        0 0 14px rgba(90,150,255,0.3); }
       /* The zone empty-state, verbatim. */
       .fc-empty { width: 100%; margin: auto 0; padding: 14px 8px; text-align: center;
         color: rgba(255,255,255,0.38); font-size: 0.8rem; line-height: 1.4; }
@@ -121,13 +117,19 @@
       .fc-expander[data-kind="month"] .fc-day { cursor: pointer; pointer-events: auto; }
       .fc-expander[data-kind="month"] .fc-day:hover {
         background: linear-gradient(180deg, rgba(70,110,190,0.34), rgba(40,70,130,0.26));
-        box-shadow: inset 0 0 0 1px rgba(125,180,255,0.5), 0 0 18px rgba(90,150,255,0.35); }
+        box-shadow: inset 0 0 0 1px rgba(125,180,255,0.5), 0 0 30px rgba(90,150,255,0.42); }
 
       /* The expander: the SAME bucket at its final size from frame one, travelling between its
          slot and the defined viewport on a composited transform. One backdrop pass. */
       .fc-expander { position: absolute; z-index: 5; pointer-events: auto; -webkit-app-region: no-drag;
         transform-origin: 0 0;
         -webkit-backdrop-filter: blur(28px) saturate(140%); backdrop-filter: blur(28px) saturate(140%); }
+      .fc-contracting-expander {
+        background: transparent;
+        box-shadow: none;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
       /* A WARM (prefetched, invisible) expander must be completely inert — its day cells'
          pointer-events:auto would otherwise eat the hover/clicks meant for the grid beneath. */
       .fc-warm, .fc-warm * { pointer-events: none !important; }
@@ -138,18 +140,24 @@
   // ── Builders — the same structure at every size ─────────────────────────────────────────
   const dayCellHTML = (m, d) => {
     const date = iso(m, d);
-    return `<div class="fc-day${date === todayIso ? " fc-today" : ""}" data-date="${date}"` +
-      (d === 1 ? ` style="grid-column-start:${firstDow(m) + 1}"` : "") +
-      `><span class="fc-day-num">${d}</span><div class="fc-day-body"></div></div>`;
+    return `<div class="fc-day" data-date="${date}"><span class="fc-day-num">${d}</span><div class="fc-day-body"></div></div>`;
+  };
+  const monthDaysHTML = (m) => {
+    const leading = firstDow(m);
+    const dayCount = daysIn(m);
+    const trailing = 42 - leading - dayCount;
+    return `${'<div class="fc-day-spacer"></div>'.repeat(leading)}` +
+      `${Array.from({ length: dayCount }, (_, i) => dayCellHTML(m, i + 1)).join("")}` +
+      `${'<div class="fc-day-spacer"></div>'.repeat(trailing)}`;
   };
   const monthInnerHTML = (m) =>
     `<div class="fc-hd"><span>${MONTHS[m]}</span></div>` +
     `<div class="fc-dowrow">${DOW.map((d) => `<span>${d}</span>`).join("")}</div>` +
-    `<div class="fc-days">${Array.from({ length: daysIn(m) }, (_, i) => dayCellHTML(m, i + 1)).join("")}</div>`;
+    `<div class="fc-days">${monthDaysHTML(m)}</div>`;
   const dayInnerHTML = (date) => {
     const [, mo, da] = date.split("-").map(Number);
     const d = new Date(YEAR, mo - 1, da);
-    return `<div class="fc-hd"><span>${MONTHS[mo - 1]} ${da}</span><span class="fc-pill">${DOW_FULL[d.getDay()]}</span></div>` +
+    return `<div class="fc-hd"><span>${DOW_FULL[d.getDay()]}, ${MONTHS[mo - 1]} ${da}</span></div>` +
       `<div class="fc-empty" data-date="${date}">Drag cards here</div>`;
   };
 
@@ -250,6 +258,21 @@
     warm = { key, el: exp };
   };
   const dropWarm = () => { if (warm) { warm.el.remove(); warm = null; } };
+  const afterTransform = (el, fn) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      el.removeEventListener("transitionend", onEnd);
+      clearTimeout(fallback);
+      fn();
+    };
+    const onEnd = (e) => {
+      if (e.target === el && e.propertyName === "transform") finish();
+    };
+    const fallback = setTimeout(finish, MORPH_MS + 25);
+    el.addEventListener("transitionend", onEnd);
+  };
 
   // ── Expand: ONE camera move — the world dives INTO the bucket on the same trajectory the
   //    real view rides out of its slot. Uniform scale (matched aspects): nothing stretches. ──
@@ -277,7 +300,7 @@
       below.style.transform = dive;
       below.style.opacity = "0";
     });
-    setTimeout(() => {
+    afterTransform(exp, () => {
       exp.style.transition = "none";
       below.style.transition = "none";
       below.style.visibility = "hidden";
@@ -286,7 +309,7 @@
       layers[level] = exp;
       surface.dataset.level = String(level);
       transitioning = false;
-    }, MORPH_MS + 60);
+    });
   };
 
   // ── Contract (B / Escape): the reverse camera move, landing at rest. ────────────────────
@@ -303,26 +326,28 @@
     const rx = below.offsetLeft + b.x, ry = below.offsetTop + b.y;
     below.style.transition = "none";
     below.style.transform = dive;                 // start deep inside the bucket…
-    below.style.opacity = "0";
+    below.style.opacity = "1";
     below.style.visibility = "";
     exp.style.transition = "none";
+    exp.style.opacity = "1";
+    exp.classList.add("fc-contracting-expander");
     void below.offsetWidth;
     requestAnimationFrame(() => {
-      below.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${MORPH_MS}ms ease`;
+      below.style.transition = `transform ${MORPH_MS}ms ${EASE}`;
       below.style.transform = "none";             // …and ride back out to rest
       below.style.opacity = "1";
-      exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.45)}ms ease ${Math.round(MORPH_MS * 0.55)}ms`;
+      exp.style.transition = `transform ${MORPH_MS}ms ${EASE}, opacity ${Math.round(MORPH_MS * 0.35)}ms ease ${Math.round(MORPH_MS * 0.65)}ms`;
       exp.style.transform = `translate(${(rx - E.x).toFixed(2)}px, ${(ry - E.y).toFixed(2)}px) scale(${(b.w / E.w).toFixed(5)}, ${(b.h / E.h).toFixed(5)})`;
       exp.style.opacity = "0";
     });
-    setTimeout(() => {
+    afterTransform(below, () => {
       exp.remove();
       layers[level] = null;
       level -= 1;
       surface.dataset.level = String(level);
       dropWarm();
       transitioning = false;
-    }, MORPH_MS + 60);
+    });
   };
 
   // ── Boot ────────────────────────────────────────────────────────────────────────────────
