@@ -128,6 +128,9 @@
       .fc-expander { position: absolute; z-index: 5; pointer-events: auto; -webkit-app-region: no-drag;
         transform-origin: 0 0;
         -webkit-backdrop-filter: blur(28px) saturate(140%); backdrop-filter: blur(28px) saturate(140%); }
+      /* A WARM (prefetched, invisible) expander must be completely inert — its day cells'
+         pointer-events:auto would otherwise eat the hover/clicks meant for the grid beneath. */
+      .fc-warm, .fc-warm * { pointer-events: none !important; }
     `;
     document.head.appendChild(style);
   };
@@ -241,7 +244,8 @@
     if (warm && warm.key === key) return;
     if (warm) { warm.el.remove(); warm = null; }
     const exp = buildExpander(targetEl);
-    Object.assign(exp.style, { opacity: "0.001", pointerEvents: "none", zIndex: "1" });
+    exp.classList.add("fc-warm");
+    Object.assign(exp.style, { opacity: "0.001", zIndex: "1" });
     surface.appendChild(exp);
     warm = { key, el: exp };
   };
@@ -255,7 +259,7 @@
     const r = targetEl.getBoundingClientRect();
     const key = keyOf(targetEl);
     let exp;
-    if (warm && warm.key === key) { exp = warm.el; warm = null; }
+    if (warm && warm.key === key) { exp = warm.el; exp.classList.remove("fc-warm"); warm = null; }
     else { dropWarm(); exp = buildExpander(targetEl); surface.appendChild(exp); }
     srcSel[level] = level === 0 ? `.fc-month[data-month="${targetEl.dataset.month}"]` : `.fc-day[data-date="${targetEl.dataset.date}"]`;
     Object.assign(exp.style, { zIndex: "5", pointerEvents: "auto", transition: "none", opacity: "0",
