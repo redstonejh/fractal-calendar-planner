@@ -1,0 +1,26 @@
+services:
+  fractal-calendar-web:
+    image: fractal-calendar-web:latest
+    container_name: fractal-calendar-web
+    restart: unless-stopped
+    ports:
+      - "8083:8080"
+    environment:
+      FRACTAL_WEB_PORT: "8080"
+      FRACTAL_DATA_DIR: /data
+      FRACTAL_ADMIN_USERNAME: ${FRACTAL_ADMIN_USERNAME:-admin}
+      FRACTAL_ADMIN_PASSWORD: ${FRACTAL_ADMIN_PASSWORD:?Set FRACTAL_ADMIN_PASSWORD in Portainer}
+      FRACTAL_SESSION_TTL_MS: "86400000"
+      FRACTAL_COOKIE_SECURE: "false"
+    volumes:
+      - fractal-calendar-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  fractal-calendar-data:
+    name: fractal-calendar-data

@@ -1,0 +1,7 @@
+.git
+.github
+.vite
+node_modules
+out
+*.log
+status-monitor-web/data
